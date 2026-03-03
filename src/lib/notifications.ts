@@ -7,6 +7,37 @@ import { doc, setDoc } from "firebase/firestore";
 
 const VAPID_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
 
+/** Detect iOS (iPhone, iPad, iPod) */
+export function isIos(): boolean {
+  if (typeof navigator === "undefined") return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+}
+
+/** Detect if running as PWA (added to home screen) - required for iOS push */
+export function isStandalone(): boolean {
+  if (typeof window === "undefined") return false;
+  return !!(window as Window & { standalone?: boolean }).standalone || window.matchMedia("(display-mode: standalone)").matches;
+}
+
+/** Detect if running in Capacitor iOS app (WebView) */
+export function isCapacitorIos(): boolean {
+  if (typeof window === "undefined") return false;
+  const cap = (window as Window & { Capacitor?: { getPlatform?: () => string } }).Capacitor;
+  return cap?.getPlatform?.() === "ios";
+}
+
+/**
+ * Returns a user-facing message when push is unsupported on iOS, or null if OK to proceed.
+ */
+export function getIosPushHint(): string | null {
+  if (!isIos()) return null;
+  if (isStandalone()) return null;
+  if (isCapacitorIos()) {
+    return "Push in the iOS app requires the native push plugin. Use the web version (add to Home Screen) for now.";
+  }
+  return "Add to Home Screen first: tap Share → Add to Home Screen. Push notifications only work when the app is opened from the home screen.";
+}
+
 /**
  * Request notification permission and return FCM token.
  * Returns null if denied or not supported.
@@ -14,6 +45,12 @@ const VAPID_KEY = process.env.NEXT_PUBLIC_FIREBASE_VAPID_KEY;
 export async function requestNotificationPermission(): Promise<string | null> {
   if (typeof window === "undefined") return null;
   if (!("Notification" in window)) return null;
+
+  // iOS Safari: push only works when app is added to home screen (standalone)
+  if (isIos() && !isStandalone()) {
+    console.warn("FCM iOS: Add app to Home Screen first. Push does not work in Safari browser tab.");
+    return null;
+  }
 
   let permission = Notification.permission;
   if (permission === "default") {

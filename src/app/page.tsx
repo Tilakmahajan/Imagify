@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Flame, MessageCircle, Star, Zap, Target, ScanLine, Sparkles, Upload, Link2, Camera, Heart, Skull, HandMetal, Eye, Rocket, ChevronDown } from "lucide-react";
+import { Flame, MessageCircle, Star, Zap, Target, ScanLine, Sparkles, Upload, Link2, Camera, Heart, Skull, HandMetal, Eye, Rocket, ChevronDown, Share2, Inbox } from "lucide-react";
 import { AnimateOnScroll } from "@/components/AnimateOnScroll";
 import { MobileNav } from "@/components/MobileNav";
 import { ImageShowcase } from "@/components/ImageShowcase";
@@ -572,7 +572,7 @@ export default function Home() {
                 <span className="text-outline">audience</span>
               </h2>
               <p className="mt-5 text-white/50 text-base sm:text-lg font-semibold max-w-md mx-auto">
-                Screenshots, memes, design mockups — show don&apos;t tell. Anonymous feedback that actually hits.
+                Share your link. Friends visit it and send you images — anonymously. No sign-up for them. Real feedback in your inbox.
               </p>
             </div>
           </AnimateOnScroll>
@@ -580,9 +580,9 @@ export default function Home() {
           {/* Step cards */}
           <div className="grid sm:grid-cols-3 gap-5">
             {[
-              { step: "01", Icon: Upload, title: "Upload anything", desc: "Screenshot, selfie, design mockup, meme — literally anything goes.", color: "var(--pink)", glow: "rgba(255,61,127,0.12)" },
-              { step: "02", Icon: Link2, title: "Share your link", desc: "One tap. Send it to your group chat, story, or anywhere.", color: "var(--purple)", glow: "rgba(124,58,255,0.12)" },
-              { step: "03", Icon: MessageCircle, title: "Get real reactions", desc: "100% anonymous. No sugarcoating. Real vibes only.", color: "var(--blue)", glow: "rgba(0,200,255,0.12)" },
+              { step: "01", Icon: Link2, title: "Get your link", desc: "Sign up, create your ID, get your unique feedback link from the dashboard.", color: "var(--pink)", glow: "rgba(255,61,127,0.12)" },
+              { step: "02", Icon: Share2, title: "Share your link", desc: "Send it to friends, group chat, story, or anywhere. One tap to copy or share.", color: "var(--purple)", glow: "rgba(124,58,255,0.12)" },
+              { step: "03", Icon: Inbox, title: "Get real reactions", desc: "They send you images anonymously. You see everything in your inbox. No sugarcoating.", color: "var(--blue)", glow: "rgba(0,200,255,0.12)" },
             ].map((s, i) => {
               const StepIcon = s.Icon;
               return (

@@ -19,11 +19,12 @@ import {
   saveFcmToken,
   clearFcmToken,
   onForegroundMessage,
+  getIosPushHint,
 } from "@/lib/notifications";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/lib/toast-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { ShareButtons } from "@/components/ShareButtons";
+import { FeedbackShareModal } from "@/components/FeedbackShareModal";
 import { ReportFeedbackModal } from "@/components/ReportFeedbackModal";
 
 function formatTimeAgo(iso: string) {
@@ -68,9 +69,11 @@ export default function InboxPage() {
   const [loadingData, setLoadingData] = useState(true);
   const [notifStatus, setNotifStatus] = useState<"idle" | "loading" | "enabled" | "denied" | "unsupported">("idle");
   const [selectedFeedback, setSelectedFeedback] = useState<NotifItem | null>(null);
+  const [shareModalOpen, setShareModalOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [filter, setFilter] = useState<"all" | "responses">("all");
   const optionsRef = useRef<HTMLDivElement>(null);
   const toast = useToast();
 
@@ -148,18 +151,20 @@ export default function InboxPage() {
           ),
           (snap) => {
             setFeedbacks(
-              snap.docs.map((d) => {
-                const data = d.data();
-                return {
-                  id: d.id,
-                  message: "New feedback",
-                  isRead: false,
-                  createdAt: toIsoString(data.createdAt),
-                  type: "anonymous_feedback" as const,
-                  feedbackImageUrl: data.feedbackImageUrl,
-                  coolId: "",
-                };
-              })
+              snap.docs
+                .filter((d) => d.data().deleted !== true)
+                .map((d) => {
+                  const data = d.data();
+                  return {
+                    id: d.id,
+                    message: "New feedback",
+                    isRead: false,
+                    createdAt: toIsoString(data.createdAt),
+                    type: "anonymous_feedback" as const,
+                    feedbackImageUrl: data.feedbackImageUrl,
+                    coolId: "",
+                  };
+                })
             );
           },
           (err) => {
@@ -193,6 +198,11 @@ export default function InboxPage() {
     if (notifStatus === "enabled" || notifStatus === "unsupported") return;
     if (!user) {
       toast.error("Please sign in first");
+      return;
+    }
+    const iosHint = getIosPushHint();
+    if (iosHint) {
+      toast.error(iosHint);
       return;
     }
     setNotifStatus("loading");
@@ -283,6 +293,10 @@ export default function InboxPage() {
   const visitItems = fromNotifsVisit.map((item) => ({ ...item, itemType: "visit" as const }));
   const allItems = [...feedbackItems, ...visitItems]
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  const responsesItems = [...feedbackItems].sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  const filteredItems = filter === "responses" ? responsesItems : allItems;
 
   const unreadCount = notifications.filter((n) => !n.isRead).length;
 
@@ -323,13 +337,14 @@ export default function InboxPage() {
         <h1 className="text-xl font-black mb-6">Inbox</h1>
 
         {/* Notifications toggle */}
-        <div className="flex items-center justify-between p-4 rounded-2xl mb-6 border border-[var(--border)]" style={{ background: "var(--bg-card)" }}>
-          <div className="flex items-center gap-3">
-            <Bell className="w-5 h-5 text-[var(--pink)]" />
-            <span className="font-bold text-sm">Push notifications</span>
-          </div>
-          {notifStatus === "unsupported" ? (
-            <span className="text-xs text-[var(--text-muted)]">Not supported</span>
+        <div className="flex flex-col gap-2 p-4 rounded-2xl mb-6 border border-[var(--border)]" style={{ background: "var(--bg-card)" }}>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <Bell className="w-5 h-5 text-[var(--pink)]" />
+              <span className="font-bold text-sm">Push notifications</span>
+            </div>
+            {notifStatus === "unsupported" ? (
+              <span className="text-xs text-[var(--text-muted)]">Not supported</span>
           ) : notifStatus === "denied" ? (
             <span className="text-xs text-[var(--text-muted)]">Blocked by browser</span>
           ) : notifStatus === "loading" ? (
@@ -338,7 +353,6 @@ export default function InboxPage() {
             <button
               type="button"
               onClick={handleDisableNotifications}
-              disabled={notifStatus === "loading"}
               className="relative w-12 h-7 rounded-full transition-colors flex-shrink-0 cursor-pointer"
               style={{ background: "var(--green)" }}
               aria-label="Turn off notifications"
@@ -351,7 +365,6 @@ export default function InboxPage() {
             <button
               type="button"
               onClick={handleEnableNotifications}
-              disabled={notifStatus === "loading"}
               className="relative w-12 h-7 rounded-full transition-colors flex-shrink-0 cursor-pointer"
               style={{ background: "var(--bg-secondary)", border: "2px solid var(--border)" }}
               aria-label="Turn on notifications"
@@ -361,17 +374,51 @@ export default function InboxPage() {
               />
             </button>
           )}
+          </div>
+          {getIosPushHint() && (
+            <p className="text-xs text-amber-400/90">
+              {getIosPushHint()}
+            </p>
+          )}
         </div>
 
-        {unreadCount > 0 && (
-          <button
-            type="button"
-            onClick={handleMarkAllRead}
-            className="text-xs font-bold text-[var(--pink)] hover:text-[var(--purple)] mb-4"
-          >
-            Mark all read
-          </button>
-        )}
+        <div className="flex items-center justify-between mb-4">
+          {unreadCount > 0 && (
+            <button
+              type="button"
+              onClick={handleMarkAllRead}
+              className="text-xs font-bold text-[var(--pink)] hover:text-[var(--purple)]"
+            >
+              Mark all read
+            </button>
+          )}
+          <div className="flex gap-1 ml-auto">
+            <button
+              type="button"
+              onClick={() => setFilter("all")}
+              style={{ touchAction: "manipulation" }}
+              className={`px-4 py-2 min-h-[36px] rounded-xl text-xs font-bold transition-colors ${
+                filter === "all"
+                  ? "bg-[var(--pink)] text-white"
+                  : "bg-white/5 text-[var(--text-muted)] hover:text-white"
+              }`}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              onClick={() => setFilter("responses")}
+              style={{ touchAction: "manipulation" }}
+              className={`px-4 py-2 min-h-[36px] rounded-xl text-xs font-bold transition-colors ${
+                filter === "responses"
+                  ? "bg-[var(--pink)] text-white"
+                  : "bg-white/5 text-[var(--text-muted)] hover:text-white"
+              }`}
+            >
+              Responses
+            </button>
+          </div>
+        </div>
 
         {/* Feedback list */}
         <div className="space-y-3">
@@ -379,15 +426,19 @@ export default function InboxPage() {
             <div className="py-12 text-center">
               <div className="w-8 h-8 rounded-full border-2 border-transparent animate-spin mx-auto" style={{ borderTopColor: "var(--pink)" }} />
             </div>
-          ) : allItems.length === 0 ? (
+          ) : filteredItems.length === 0 ? (
             <div className="py-16 text-center">
               <ImageIcon className="w-14 h-14 text-[var(--text-muted)] mx-auto mb-4" />
-              <p className="font-semibold text-[var(--text-muted)]">No feedback yet</p>
-              <p className="text-sm text-[var(--text-muted)] mt-1">Share your link to get started</p>
+              <p className="font-semibold text-[var(--text-muted)]">
+                {filter === "responses" ? "No responses yet" : "No feedback yet"}
+              </p>
+              <p className="text-sm text-[var(--text-muted)] mt-1">
+                {filter === "responses" ? "Feedback with images will appear here" : "Share your link to get started"}
+              </p>
               <Link href="/dashboard" className="mt-4 inline-block text-[var(--pink)] font-bold hover:underline">Go to dashboard</Link>
             </div>
           ) : (
-            allItems.map((item) =>
+            filteredItems.map((item) =>
               item.itemType === "visit" ? (
                 <div
                   key={item.id}
@@ -439,7 +490,8 @@ export default function InboxPage() {
           onClick={() => { setSelectedFeedback(null); setOptionsOpen(false); }}
         >
           <div
-            className="max-w-md w-full rounded-2xl overflow-hidden bg-[var(--bg-card)] border border-[var(--border)]"
+            className="max-w-lg w-full min-h-[85vh] max-h-[95vh] rounded-2xl overflow-y-auto flex flex-col"
+            style={{ background: "var(--modal-card-bg)", border: "1px solid rgba(255,255,255,0.15)" }}
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header: close + options menu */}
@@ -465,14 +517,16 @@ export default function InboxPage() {
                         type="button"
                         onClick={handleDelete}
                         disabled={deleting}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-red-500 hover:bg-white/5 disabled:opacity-50"
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-red-500 hover:bg-white/5 disabled:opacity-50 min-h-[44px]"
+                        style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
                       >
                         <Trash2 className="w-4 h-4" /> Delete
                       </button>
                       <button
                         type="button"
                         onClick={() => { setOptionsOpen(false); setReportModalOpen(true); }}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-[var(--text-primary)] hover:bg-white/5"
+                        className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-[var(--text-primary)] hover:bg-white/5 min-h-[44px]"
+                        style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
                       >
                         <Flag className="w-4 h-4" /> Report
                       </button>
@@ -489,45 +543,61 @@ export default function InboxPage() {
               </div>
             </div>
 
-            <div className="p-4 pb-6">
+            <div className="p-4 pb-6 flex-1 min-h-0 flex flex-col">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={selectedFeedback.feedbackImageUrl}
                 alt="Feedback"
-                className="w-full rounded-xl object-contain max-h-[40vh]"
+                className="w-full rounded-xl object-contain max-h-[70vh] min-h-[280px]"
               />
 
-              {/* Manipulative sharing message + buttons */}
-              <div className="mt-5 text-center">
-                <p className="text-sm font-bold text-[var(--text-primary)] mb-1">
-                  Love this feedback?
-                </p>
-                <p className="text-xs text-[var(--text-muted)] mb-4 max-w-[280px] mx-auto">
-                  Share it and get more — when friends see this, they&apos;ll want their own link too.
-                </p>
-                <div className="flex justify-center">
-                  <ShareButtons
-                    shareUrl={selectedFeedback.feedbackImageUrl || ""}
-                    imageUrl={selectedFeedback.feedbackImageUrl}
-                    title="Check out this feedback on PicPop!"
-                    snapshotData={{
-                      imageUrl: selectedFeedback.feedbackImageUrl || "",
-                      coolId: profile?.coolId || "picpop",
-                      feedbackImageUrls: selectedFeedback.feedbackImageUrl ? [selectedFeedback.feedbackImageUrl] : [],
-                    }}
-                  />
-                </div>
+              <div className="mt-5">
+                <button
+                  type="button"
+                  onClick={() => setShareModalOpen(true)}
+                  className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90"
+                  style={{
+                    background: "linear-gradient(135deg, var(--pink), var(--purple))",
+                    boxShadow: "0 4px 20px rgba(255,61,127,0.3)",
+                    touchAction: "manipulation",
+                    WebkitTapHighlightColor: "transparent",
+                  }}
+                >
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                  </svg>
+                  Share
+                </button>
               </div>
             </div>
           </div>
         </div>
       )}
 
+      {selectedFeedback?.feedbackImageUrl && shareModalOpen && profile && (
+        <FeedbackShareModal
+          isOpen={shareModalOpen}
+          onClose={() => setShareModalOpen(false)}
+          singleFeedback={{ feedbackImageUrl: selectedFeedback.feedbackImageUrl }}
+          allData={{
+            imageUrl: selectedFeedback.feedbackImageUrl,
+            coolId: profile.coolId,
+            feedbackImageUrls: [],
+          }}
+          shareUrl={`${typeof window !== "undefined" ? window.location.origin : ""}/u/${profile.coolId}`}
+          userFeedbackLink={`${typeof window !== "undefined" ? window.location.origin : ""}/u/${profile.coolId}`}
+        />
+      )}
+
       <ReportFeedbackModal
         isOpen={reportModalOpen}
         onClose={() => setReportModalOpen(false)}
         feedbackId={feedbackDocId || ""}
-        onReportSuccess={() => { toast.success("Report submitted"); setSelectedFeedback(null); }}
+        onReportSuccess={(action) => {
+          if (action === "block") toast.success("Report submitted. User blocked.");
+          else toast.success("Report submitted");
+          setSelectedFeedback(null);
+        }}
         onReportError={(msg) => toast.error(msg)}
       />
     </div>

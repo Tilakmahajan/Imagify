@@ -11,7 +11,12 @@
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios",
     "deploy": "npm run build && firebase deploy",
-    "deploy:hosting": "npm run build && firebase deploy --only hosting"
+    "deploy:all": "npm run build && firebase deploy",
+    "deploy:hosting": "npm run build && firebase deploy --only hosting",
+    "deploy:hosting:main": "npm run build && firebase deploy --only hosting:main",
+    "deploy:admin": "npm run build && firebase deploy --only hosting:admin",
+    "deploy:functions": "firebase deploy --only functions",
+    "deploy:firestore": "firebase deploy --only firestore"
   },
   "dependencies": {
     "@capacitor/android": "^8.1.0",
@@ -24,6 +29,7 @@
     "html-to-image": "^1.11.13",
     "lucide-react": "^0.575.0",
     "next": "^15.1.7",
+    "qrcode.react": "^4.2.0",
     "react": "19.0.0",
     "react-dom": "19.0.0"
   },

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Nunito, Geist_Mono } from "next/font/google";
 import { CursorGlow } from "@/components/CursorGlow";
 import { AuthProvider } from "@/lib/auth-context";
@@ -22,8 +23,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PicPop — Anonymous Image-Based Feedback",
+  title: "PicPop - Anonymous Image-Based Feedback",
   description: "Share honest feedback anonymously with images. No sign-up, no tracking. Just upload and send.",
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
 };
 
 export default function RootLayout({
@@ -32,9 +38,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
+    <html lang="en" className="dark" suppressHydrationWarning>
+      <head />
       <body
         className={`${nunito.variable} ${geistMono.variable} antialiased bg-[var(--bg-primary)] text-[var(--text-primary)]`}
+        suppressHydrationWarning
       >
         <ThemeProvider>
         <AuthProvider>
@@ -45,10 +53,16 @@ export default function RootLayout({
               {children}
               <CursorGlow />
               <GlobalLoader />
+              <AddToHomeScreenPrompt />
             </LoadingProvider>
           </ToastProvider>
         </AuthProvider>
         </ThemeProvider>
+        <Script
+          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9913239924968431"
+          strategy="lazyOnload"
+          crossOrigin="anonymous"
+        />
       </body>
     </html>
   );

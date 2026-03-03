@@ -18,6 +18,10 @@ interface ShareButtonsProps {
     coolId: string;
     feedbackImageUrls: string[];
   };
+  /** User's feedback link for QR code (e.g. origin/u/username) */
+  userFeedbackLink?: string;
+  /** Simple mode: big image + single Share button (no platform-specific buttons) */
+  simple?: boolean;
 }
 
 // WhatsApp: opens app with pre-filled text
@@ -41,6 +45,7 @@ export function ShareButtons({
   imageUrl,
   title = "Check out this on PicPop!",
   snapshotData,
+  simple = false,
 }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false);
   const [instagramSharing, setInstagramSharing] = useState(false);
@@ -99,7 +104,7 @@ export function ShareButtons({
 
       if (navigator.share && navigator.canShare?.({ files: [file] })) {
         try {
-          await navigator.share({ files: [file], text: `${title} ${fullUrl}`, title });
+          await navigator.share({ files: [file], text: title, url: fullUrl, title });
         } catch {
           /* User dismissed – continue to open Instagram */
         }
@@ -145,7 +150,7 @@ export function ShareButtons({
         .then((blob) => {
           const file = new File([blob], "picpop.jpg", { type: blob.type || "image/jpeg" });
           if (navigator.canShare?.({ files: [file] })) {
-            return navigator.share({ files: [file], text: `${title} ${fullUrl}`, title });
+            return navigator.share({ files: [file], text: title, url: fullUrl, title });
           }
         })
         .then(() => {
@@ -166,6 +171,46 @@ export function ShareButtons({
   const shareBtnClass =
     "rounded-lg p-2.5 transition-all shrink-0 disabled:opacity-60 flex items-center justify-center min-w-[44px] min-h-[44px]";
 
+  const handleSimpleShare = async () => {
+    if (imageUrl && navigator.share) {
+      try {
+        const res = await fetch(imageUrl, { mode: "cors" });
+        if (!res.ok) throw new Error("Failed to fetch image");
+        const blob = await res.blob();
+        const file = new File([blob], "picpop-feedback.png", { type: blob.type || "image/png" });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file], text: fullUrl, title });
+          return;
+        }
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") copyToClipboard();
+        return;
+      }
+    }
+    copyToClipboard();
+  };
+
+  if (simple) {
+    return (
+      <button
+        type="button"
+        onClick={handleSimpleShare}
+        className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90"
+        style={{
+          background: "linear-gradient(135deg, var(--pink), var(--purple))",
+          boxShadow: "0 4px 20px rgba(255,61,127,0.3)",
+          touchAction: "manipulation",
+          WebkitTapHighlightColor: "transparent",
+        }}
+      >
+        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+        </svg>
+        Share
+      </button>
+    );
+  }
+
   return (
     <div className="space-y-2">
       {instagramSharing && snapshotData && (
@@ -185,6 +230,7 @@ export function ShareButtons({
             coolId={snapshotData.coolId}
             feedbackImageUrls={snapshotData.feedbackImageUrls}
             shareUrl={fullUrl}
+            userFeedbackLink={userFeedbackLink}
           />
         </div>
       )}

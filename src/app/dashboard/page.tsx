@@ -90,7 +90,7 @@ export default function DashboardPage() {
       try {
         await navigator.share({
           title: "Send me feedback on PicPop",
-          text: `Send me anonymous image feedback — ${feedbackUrl}`,
+          text: "Send me anonymous image feedback",
           url: feedbackUrl,
         });
         toast.success("Shared!");
@@ -125,7 +125,7 @@ export default function DashboardPage() {
                 @{profile.coolId}
               </button>
               {showDropdown && (
-                <div className="absolute right-0 top-full mt-2 py-2 w-32 rounded-xl border border-[var(--border)] shadow-lg z-50"
+                <div className="absolute right-0 top-full mt-2 py-2 w-36 rounded-xl border border-[var(--border)] shadow-lg z-50"
                   style={{ background: "var(--bg-card)" }}
                 >
                   <button

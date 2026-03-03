@@ -123,3 +123,24 @@ When someone responds to your post, you receive a push notification.
 | **Service worker** | `public/firebase-messaging-sw.js` must be served at `/firebase-messaging-sw.js`. If using a different Firebase project, update the config object in that file to match your project. |
 | **HTTPS or localhost** | Push requires secure context. |
 | **Cloud Function logs** | Firebase Console → Functions → Logs — "Push sent" = success; "user has no fcmToken" = enable in dashboard. |
+
+### iOS-specific (Safari / PWA)
+
+| Issue | Solution |
+|-------|----------|
+| **Push not working on iOS** | Web push on iOS requires: 1) **iOS 16.4+** 2) **Add to Home Screen** — tap Share → Add to Home Screen. Push does NOT work in a regular Safari tab. 3) `manifest.json` with `display: "standalone"` (already configured). |
+| **Capacitor iOS app** | Web push (FCM JS SDK) is unreliable in WKWebView. For native iOS app, use `@capacitor/push-notifications` or `@capacitor-firebase/messaging` with APNs. See [Capacitor Push Notifications](https://capacitorjs.com/docs/apis/push-notifications). |
+
+## 9. Admin Panel
+
+The admin panel at `/admin` shows users, reports, blocked IPs, and recent feedbacks.
+
+**Setup:**
+
+1. Get your Firebase Auth UID (sign in, then check Firebase Console → Authentication → Users, or add `console.log(user.uid)` in your app).
+2. Set `ADMIN_UIDS` for Cloud Functions (one of):
+   - **Option A:** On first deploy, the CLI will prompt for `ADMIN_UIDS`. Enter your UID (comma-separated for multiple admins).
+   - **Option B:** Create `functions/.env.local` with `ADMIN_UIDS=your-uid-here`
+   - **Option C:** Google Cloud Console → Cloud Functions → select `getAdminData` → Edit → Environment variables
+3. Deploy: `firebase deploy --only functions`
+4. Visit `/admin` or click "Admin panel" in the dashboard dropdown (next to your @username).

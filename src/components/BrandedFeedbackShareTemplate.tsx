@@ -2,23 +2,19 @@
 
 import { ShareQRCode } from "./ShareQRCode";
 
-/** Story-sized card (9:16) for sharing to Instagram/WhatsApp. QR code + watermark. */
-export function ShareCardTemplate({
-  imageUrl,
+/** Story-sized branded card for sharing. Includes QR code, watermark, attractive template. */
+export function BrandedFeedbackShareTemplate({
+  feedbackImageUrl,
   coolId,
-  feedbackImageUrls = [],
   shareUrl,
   userFeedbackLink,
 }: {
-  imageUrl: string;
-  coolId: string;
-  feedbackImageUrls?: string[];
+  feedbackImageUrl: string;
+  coolId?: string;
   shareUrl: string;
-  /** Full URL for QR (user's link for viral growth) */
   userFeedbackLink?: string;
 }) {
-  const fullUrl = shareUrl.startsWith("http") ? shareUrl : `https://picpop.me${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`;
-  const qrUrl = userFeedbackLink || fullUrl;
+  const qrUrl = userFeedbackLink || shareUrl;
   return (
     <div
       data-share-template
@@ -38,7 +34,7 @@ export function ShareCardTemplate({
         boxShadow: "inset 0 0 60px rgba(124,58,255,0.08), 0 8px 32px rgba(0,0,0,0.4)",
       }}
     >
-      {/* Watermark badge */}
+      {/* Watermark badge - top right */}
       <div
         style={{
           position: "absolute",
@@ -54,7 +50,7 @@ export function ShareCardTemplate({
         <span style={{ fontSize: 12, fontWeight: 900, color: "#fff", letterSpacing: "0.15em" }}>PICPOP</span>
       </div>
 
-      {/* Header */}
+      {/* Header with avatar */}
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
         <div
           style={{
@@ -74,12 +70,14 @@ export function ShareCardTemplate({
           {(coolId || "?")[0].toUpperCase()}
         </div>
         <div>
-          <p style={{ margin: 0, fontWeight: 900, fontSize: 18, color: "#fff" }}>@{coolId}</p>
-          <p style={{ margin: 0, fontSize: 11, color: "rgba(255,255,255,0.6)", letterSpacing: "0.12em" }}>picpop</p>
+          <p style={{ margin: 0, fontWeight: 900, fontSize: 18, color: "#fff" }}>@{coolId || "picpop"}</p>
+          <p style={{ margin: 0, fontSize: 11, color: "rgba(255,255,255,0.6)", letterSpacing: "0.12em" }}>
+            anonymous feedback
+          </p>
         </div>
       </div>
 
-      {/* Main image */}
+      {/* Main image with subtle frame */}
       <div
         style={{
           flex: 1,
@@ -89,52 +87,34 @@ export function ShareCardTemplate({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          minHeight: 260,
+          minHeight: 280,
           border: "1px solid rgba(255,255,255,0.06)",
+          position: "relative",
         }}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        <img
+          src={feedbackImageUrl}
+          alt="Feedback"
+          crossOrigin="anonymous"
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        />
       </div>
-
-      {/* Reactions strip */}
-      {feedbackImageUrls.length > 0 && (
-        <div style={{ marginTop: 12 }}>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {feedbackImageUrls.slice(0, 6).map((url, i) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                key={i}
-                src={url}
-                alt=""
-                crossOrigin="anonymous"
-                style={{
-                  width: 44,
-                  height: 44,
-                  borderRadius: 10,
-                  objectFit: "cover",
-                  border: "2px solid rgba(255,255,255,0.2)",
-                }}
-              />
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Footer: QR + branding */}
       <div
         style={{
           marginTop: "auto",
-          paddingTop: 14,
+          paddingTop: 16,
           borderTop: "1px solid rgba(255,255,255,0.08)",
           display: "flex",
           alignItems: "center",
-          gap: 14,
+          gap: 16,
           flexWrap: "wrap",
         }}
       >
         <div style={{ flexShrink: 0 }}>
-          <ShareQRCode url={qrUrl} size={80} />
+          <ShareQRCode url={qrUrl} size={88} />
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <p
@@ -154,7 +134,7 @@ export function ShareCardTemplate({
           <p style={{ margin: "4px 0 0 0", fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.6)" }}>
             Scan QR • Get your link
           </p>
-          <p style={{ margin: "4px 0 0 0", fontSize: 9, color: "rgba(255,255,255,0.5)", wordBreak: "break-all" }}>
+          <p style={{ margin: "6px 0 0 0", fontSize: 9, color: "rgba(255,255,255,0.5)", wordBreak: "break-all" }}>
             {shareUrl}
           </p>
         </div>

@@ -4,6 +4,7 @@ const nextConfig: NextConfig = {
   output: "export",
   reactStrictMode: false,
   eslint: { ignoreDuringBuilds: true },
+  serverExternalPackages: ["@grpc/grpc-js", "@grpc/proto-loader"],
   webpack: (config, { dev }) => {
     // Avoid casing mismatch on Windows (Imagify vs imagify)
     config.resolve = config.resolve || {};

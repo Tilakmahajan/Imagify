@@ -12,7 +12,7 @@ import {
 } from "firebase/firestore";
 import { db, ensureFirestoreNetwork } from "@/lib/firebase";
 
-const BASE_TITLE = "PicPop — Anonymous Image-Based Feedback";
+const BASE_TITLE = "PicPop - Anonymous Image-Based Feedback";
 
 export function NotificationTitleUpdater() {
   const { user } = useAuth();

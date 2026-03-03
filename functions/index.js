@@ -1,21 +1,68 @@
 const { initializeApp } = require("firebase-admin/app");
 const { getFirestore, FieldValue } = require("firebase-admin/firestore");
+const { getStorage } = require("firebase-admin/storage");
 const { getMessaging } = require("firebase-admin/messaging");
 const functions = require("firebase-functions/v1");
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { defineString } = require("firebase-functions/params");
 
 initializeApp();
 
+// CORS: allow localhost (dev), production, and Capacitor iOS/Android WebViews
 const CORS_ORIGINS = [
   "http://localhost:3000",
-  "http://localhost:3001",
   "http://127.0.0.1:3000",
-  "http://127.0.0.1:3001",
-  "https://imagify-5f3d5.web.app",
-  "https://imagify-5f3d5.firebaseapp.com",
   "https://picpop.me",
   "https://www.picpop.me",
+  "https://imagify-5f3d5.web.app",
+  "https://imagify-5f3d5.firebaseapp.com",
+  "capacitor://localhost",
+  "ionic://localhost",
+  "http://localhost",
+  "https://localhost",
 ];
+
+const adminUidsParam = defineString("ADMIN_UIDS", { default: "" });
+const adminSecretParam = defineString("ADMIN_SECRET", { default: "" });
+
+/** Get admin UIDs from Firestore config/admin or env/param. Firestore allows adding admins without redeploy. */
+async function getAdminUids() {
+  const fromEnv = adminUidsParam.value() || process.env.ADMIN_UIDS || "";
+  const fromEnvList = fromEnv.split(",").map((s) => s.trim()).filter(Boolean);
+  if (fromEnvList.length) return fromEnvList;
+
+  try {
+    const db = getFirestore();
+    const snap = await db.doc("config/admin").get();
+    if (snap.exists) {
+      const data = snap.data();
+      const uids = data?.uids;
+      if (Array.isArray(uids) && uids.length) {
+        return uids.filter((u) => typeof u === "string" && u.trim());
+      }
+    }
+  } catch (err) {
+    console.warn("getAdminUids Firestore read failed:", err);
+  }
+  return [];
+}
+
+async function requireAdmin(request) {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "Sign in required");
+  }
+  const adminUids = await getAdminUids();
+  if (!adminUids.length) {
+    console.warn("No admins configured - set Firestore config/admin.uids or ADMIN_UIDS env");
+    throw new HttpsError(
+      "permission-denied",
+      `Add your UID to Firestore: create document config/admin with field uids: ["${request.auth.uid}"]. Or set ADMIN_UIDS env var.`
+    );
+  }
+  if (!adminUids.includes(request.auth.uid)) {
+    throw new HttpsError("permission-denied", "Admin access required");
+  }
+}
 
 /** Get client IP from callable request */
 function getClientIp(req) {
@@ -174,44 +221,63 @@ exports.onVisitCreated = functions.firestore.document("visits/{visitId}").onCrea
 });
 
 /**
- * Report feedback - blocks reporter IP and stores report.
- * Uses v2 onCall with cors for localhost support.
+ * Report feedback - supports 2 actions: report (submit only), block (submit + block submitter IP). (Gen 2)
  */
 exports.reportFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
-  const { feedbackId, reason, otherReason } = request.data || {};
-  if (!feedbackId || !reason) {
-    throw new HttpsError("invalid-argument", "feedbackId and reason are required");
+  const { feedbackId, reason, otherReason, action } = request.data || {};
+  if (!feedbackId) {
+    throw new HttpsError("invalid-argument", "feedbackId is required");
+  }
+  const act = action || "report";
+  if (!["report", "block"].includes(act)) {
+    throw new HttpsError("invalid-argument", "action must be report or block");
+  }
+  if (!reason) {
+    throw new HttpsError("invalid-argument", "reason is required");
   }
 
-  const ip = getClientIp(request.rawRequest);
-
+  const reporterIp = getClientIp(request.rawRequest);
   const db = getFirestore();
+
   try {
+    const feedbackSnap = await db.doc(`feedbacks/${feedbackId}`).get();
+    if (!feedbackSnap.exists) {
+      throw new HttpsError("not-found", "Feedback not found");
+    }
+    const feedback = feedbackSnap.data();
+    const submitterIp = feedback?.submitterIp || null;
+
     await db.runTransaction(async (tx) => {
       const reportRef = db.collection("reports").doc();
       tx.set(reportRef, {
         feedbackId,
         reason,
         otherReason: reason === "Other" ? (otherReason || "") : null,
-        reporterIp: ip,
+        reporterIp,
+        action: act,
         createdAt: new Date().toISOString(),
       });
-      const ipKey = ip.replace(/[.:]/g, "_");
-      tx.set(db.collection("blockedIps").doc(ipKey), {
-        ip,
-        reason: "Reported feedback",
-        createdAt: new Date().toISOString(),
-      });
+
+      if (act === "block" && submitterIp) {
+        const ipKey = submitterIp.replace(/[.:]/g, "_");
+        tx.set(db.collection("blockedIps").doc(ipKey), {
+          ip: submitterIp,
+          reason: "Blocked via report",
+          feedbackId,
+          createdAt: new Date().toISOString(),
+        });
+      }
     });
     return { success: true };
   } catch (err) {
+    if (err && err.code) throw err;
     console.error("reportFeedback failed:", err);
     throw new HttpsError("internal", "Report failed");
   }
 });
 
 /**
- * Delete inbox feedback - only recipient can delete (feedback with recipientId).
+ * Delete inbox feedback - only recipient can delete (feedback with recipientId). (Gen 2)
  */
 exports.deleteInboxFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
   const { feedbackId } = request.data || {};
@@ -232,7 +298,10 @@ exports.deleteInboxFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => 
     throw new HttpsError("permission-denied", "Only the recipient can delete this feedback");
   }
 
-  await db.doc(`feedbacks/${feedbackId}`).delete();
+  await db.doc(`feedbacks/${feedbackId}`).update({
+    deleted: true,
+    deletedAt: new Date().toISOString(),
+  });
 
   // Also delete/update related notification if exists
   const notifSnap = await db.collection("notifications")
@@ -245,9 +314,9 @@ exports.deleteInboxFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => 
 });
 
 /**
- * Delete feedback - only image owner can delete.
+ * Delete feedback - only image owner can delete. (Gen 2)
  */
-exports.deleteFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
+exports.deleteFeedback = onCall({ cors: true }, async (request) => {
   const { feedbackId } = request.data || {};
   if (!feedbackId) {
     throw new HttpsError("invalid-argument", "feedbackId is required");
@@ -276,14 +345,94 @@ exports.deleteFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
     throw new HttpsError("permission-denied", "Only the post owner can delete");
   }
 
-  await db.doc(`feedbacks/${feedbackId}`).delete();
+  await db.doc(`feedbacks/${feedbackId}`).update({
+    deleted: true,
+    deletedAt: new Date().toISOString(),
+  });
   return { success: true };
 });
 
 /**
- * Submit feedback - supports either imageId (reaction to post) or recipientId (inbox feedback).
+ * Submit feedback - supports either imageId (reaction to post) or recipientId (inbox feedback). (Gen 2)
  * Checks IP against blocked list, then adds to Firestore.
  */
+/**
+ * Get popular memes from Imgflip API. Proxied to avoid CORS. (Gen 2)
+ */
+exports.getImgflipMemes = onCall({ cors: CORS_ORIGINS }, async () => {
+  const res = await fetch("https://api.imgflip.com/get_memes");
+  const json = await res.json();
+  if (!json.success || !Array.isArray(json.data?.memes)) {
+    throw new HttpsError("internal", "Failed to fetch memes");
+  }
+  return { memes: json.data.memes };
+});
+
+/**
+ * Submit feedback using an Imgflip meme URL. Fetches image server-side, uploads to Storage, creates feedback. (Gen 2)
+ */
+exports.submitFeedbackFromImgflip = onCall({ cors: CORS_ORIGINS }, async (request) => {
+  try {
+    const { imageUrl, recipientId } = request.data || {};
+    if (!imageUrl || typeof imageUrl !== "string") {
+      throw new HttpsError("invalid-argument", "imageUrl is required");
+    }
+    if (!recipientId || typeof recipientId !== "string") {
+      throw new HttpsError("invalid-argument", "recipientId is required");
+    }
+    const url = imageUrl.trim();
+    if (!url.startsWith("https://i.imgflip.com/")) {
+      throw new HttpsError("invalid-argument", "Only Imgflip image URLs are allowed");
+    }
+
+    const ip = getClientIp(request.rawRequest);
+    const ipKey = ip.replace(/[.:]/g, "_");
+    const db = getFirestore();
+
+    const blockedSnap = await db.doc(`blockedIps/${ipKey}`).get();
+    if (blockedSnap.exists) {
+      throw new HttpsError("permission-denied", "You cannot submit feedback. Your access has been restricted.");
+    }
+
+    const userSnap = await db.doc(`users/${recipientId}`).get();
+    if (!userSnap.exists) {
+      throw new HttpsError("not-found", "User not found.");
+    }
+
+    const imgRes = await fetch(url);
+    if (!imgRes.ok) {
+      throw new HttpsError("internal", "Could not fetch image. Try another meme.");
+    }
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    const ext = url.includes(".png") ? "png" : "jpg";
+    const feedbackId = require("crypto").randomUUID();
+    const storage = getStorage();
+    const bucket = storage.bucket();
+    const path = `feedback_images/${feedbackId}.${ext}`;
+    const file = bucket.file(path);
+    await file.save(buffer, { contentType: imgRes.headers.get("content-type") || `image/${ext}` });
+    await file.makePublic();
+    const feedbackImageUrl = `https://storage.googleapis.com/${bucket.name}/${path}`;
+
+    const feedbackData = {
+      feedbackImageUrl,
+      createdAt: new Date().toISOString(),
+      submitterId: request.auth?.uid || null,
+      submitterIp: ip,
+      deleted: false,
+      recipientId,
+    };
+    await db.collection("feedbacks").add(feedbackData);
+    return { success: true };
+  } catch (err) {
+    if (err && err.code) {
+      throw err;
+    }
+    console.error("submitFeedbackFromImgflip error:", err);
+    throw new HttpsError("internal", "Failed to send. Try again.");
+  }
+});
+
 exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
   try {
     const { imageId, parentId, feedbackImageUrl, recipientId } = request.data || {};
@@ -326,6 +475,8 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
       feedbackImageUrl,
       createdAt: new Date().toISOString(),
       submitterId: request.auth?.uid || null,
+      submitterIp: ip,
+      deleted: false,
     };
     if (hasImage) {
       feedbackData.imageId = imageId;
@@ -343,4 +494,114 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
     console.error("submitFeedback error:", err);
     throw new HttpsError("internal", "Failed to post. Please try again.");
   }
+});
+
+/**
+ * Admin: Get users, reports, blocked IPs. Requires ADMIN_UIDS env var. (Gen 2)
+ */
+exports.getAdminData = onCall({ cors: CORS_ORIGINS }, async (request) => {
+  await requireAdmin(request);
+  const db = getFirestore();
+
+  const [usersSnap, reportsSnap, blockedSnap, feedbacksSnap] = await Promise.all([
+    db.collection("users").limit(500).get(),
+    db.collection("reports").limit(200).get(),
+    db.collection("blockedIps").limit(200).get(),
+    db.collection("feedbacks").limit(100).get(),
+  ]);
+
+  const toDoc = (d) => ({ id: d.id, ...d.data() });
+  const sortByCreated = (a, b) => (new Date(b.createdAt || 0)).getTime() - (new Date(a.createdAt || 0)).getTime();
+
+  const users = usersSnap.docs.map(toDoc).sort(sortByCreated);
+  const reports = reportsSnap.docs.map(toDoc).sort(sortByCreated);
+  const blockedIps = blockedSnap.docs.map(toDoc).sort(sortByCreated);
+  const feedbacks = feedbacksSnap.docs.map(toDoc).sort(sortByCreated);
+
+  return { users, reports, blockedIps, feedbacks };
+});
+
+/**
+ * Admin: Unblock an IP. (Gen 2)
+ */
+exports.adminUnblockIp = onCall({ cors: CORS_ORIGINS }, async (request) => {
+  await requireAdmin(request);
+  const { ipKey } = request.data || {};
+  if (!ipKey) {
+    throw new HttpsError("invalid-argument", "ipKey is required");
+  }
+
+  const db = getFirestore();
+  const docRef = db.collection("blockedIps").doc(ipKey);
+  const snap = await docRef.get();
+  if (!snap.exists) {
+    throw new HttpsError("not-found", "Blocked IP not found");
+  }
+  await docRef.delete();
+  return { success: true };
+});
+
+/**
+ * Admin: Add a UID to the admin list (Firestore config/admin). (Gen 2)
+ */
+exports.adminAddAdmin = onCall({ cors: CORS_ORIGINS }, async (request) => {
+  await requireAdmin(request);
+  const { uid } = request.data || {};
+  if (!uid || typeof uid !== "string") {
+    throw new HttpsError("invalid-argument", "uid is required");
+  }
+  const newUid = uid.trim();
+  if (!newUid) {
+    throw new HttpsError("invalid-argument", "uid is required");
+  }
+
+  const db = getFirestore();
+  const configRef = db.doc("config/admin");
+
+  const snap = await configRef.get();
+  let uids = [];
+  if (snap.exists) {
+    const data = snap.data();
+    uids = Array.isArray(data?.uids) ? [...data.uids] : [];
+  }
+  if (uids.includes(newUid)) {
+    return { success: true, message: "Already an admin" };
+  }
+  uids.push(newUid);
+  await configRef.set({ uids }, { merge: true });
+  return { success: true, message: "Admin added" };
+});
+
+/**
+ * Bootstrap: Add yourself as admin using ADMIN_SECRET. No existing admin required. (Gen 2)
+ * Sign in first, then enter the admin key to add your UID to Firestore config/admin.
+ */
+exports.adminBootstrap = onCall({ cors: CORS_ORIGINS }, async (request) => {
+  if (!request.auth?.uid) {
+    throw new HttpsError("unauthenticated", "Sign in first, then use the admin key to add yourself.");
+  }
+  const { secret } = request.data || {};
+  const expected = adminSecretParam.value() || process.env.ADMIN_SECRET || "";
+  if (!expected) {
+    throw new HttpsError("failed-precondition", "ADMIN_SECRET not configured. Set it in Firebase Console → Functions → Configuration.");
+  }
+  if (!secret || String(secret).trim() !== expected.trim()) {
+    throw new HttpsError("permission-denied", "Invalid admin key");
+  }
+
+  const db = getFirestore();
+  const configRef = db.doc("config/admin");
+  const snap = await configRef.get();
+  let uids = [];
+  if (snap.exists) {
+    const data = snap.data();
+    uids = Array.isArray(data?.uids) ? [...data.uids] : [];
+  }
+  const uid = request.auth.uid;
+  if (uids.includes(uid)) {
+    return { success: true, message: "Already an admin" };
+  }
+  uids.push(uid);
+  await configRef.set({ uids }, { merge: true });
+  return { success: true, message: "Admin added. Reload the page." };
 });

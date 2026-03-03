@@ -1,0 +1,16 @@
+{
+  "name": "PicPop",
+  "short_name": "PicPop",
+  "description": "Anonymous Image-Based Feedback",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0E0F1A",
+  "theme_color": "#FF3D7F",
+  "icons": [
+    {
+      "src": "/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { initializeAuth, getAuth, browserLocalPersistence } from "firebase/auth";
 import {
   initializeFirestore,
   getFirestore,
@@ -28,7 +28,21 @@ if (typeof window !== "undefined") {
   console.log("[Firebase] init:", app ? "configured" : "not configured", app ? `(project: ${firebaseConfig.projectId || "?"})` : "(missing apiKey or env)");
 }
 
-export const auth = app ? getAuth(app) : null;
+// Use initializeAuth instead of getAuth to avoid "Component auth has not been registered yet"
+// (happens with Next.js/webpack bundling; initializeAuth explicitly registers the component)
+export const auth = app
+  ? (() => {
+      try {
+        return initializeAuth(app, { persistence: browserLocalPersistence });
+      } catch (e) {
+        if ((e as { code?: string })?.code === "auth/already-initialized") {
+          return getAuth(app);
+        }
+        console.error("[Firebase] Auth init failed:", e);
+        return null;
+      }
+    })()
+  : null;
 
 // Use memoryLocalCache + force long polling to avoid "client is offline" errors.
 // - memoryLocalCache: skips IndexedDB persistence (which can fail and cause offline state)

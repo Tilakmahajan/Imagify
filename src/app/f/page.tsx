@@ -119,7 +119,8 @@ function FeedbackThreadItem({
             <button
               type="button"
               onClick={() => onReport?.(feedback)}
-              className="text-xs font-bold text-white/50 hover:text-amber-400 transition-colors flex items-center gap-1"
+              className="text-xs font-bold text-white/50 hover:text-amber-400 transition-colors flex items-center gap-1 py-2 px-1 min-h-[32px] -my-1"
+              style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
               title="Report"
             >
               <Flag className="w-3 h-3" /> report
@@ -232,7 +233,9 @@ function FeedbackOnImageContent() {
         unsub = onSnapshot(
           query(collection(firestore, "feedbacks"), where("imageId", "==", imageId)),
           (fbSnap) => {
-            const list = fbSnap.docs.map((d) => ({ id: d.id, ...d.data() } as Feedback));
+            const list = fbSnap.docs
+              .filter((d) => d.data().deleted !== true)
+              .map((d) => ({ id: d.id, ...d.data() } as Feedback));
             const withImages = list.filter((f) => f.feedbackImageUrl);
 
             if (isOwner) {
@@ -391,6 +394,11 @@ function FeedbackOnImageContent() {
                 shareUrl={`/f?imageId=${imageId}`}
                 imageUrl={image.imageUrl}
                 title="Check out this feedback on PicPop!"
+                userFeedbackLink={
+                  typeof window !== "undefined"
+                    ? `${window.location.origin}/u/${image.coolId}`
+                    : undefined
+                }
                 snapshotData={
                   isOwner
                     ? {
@@ -488,7 +496,11 @@ function FeedbackOnImageContent() {
           isOpen={!!reportModal}
           onClose={() => setReportModal(null)}
           feedbackId={reportModal.id}
-          onReportSuccess={() => toast.success("Report submitted. The reporter has been restricted.")}
+          onReportSuccess={(action) => {
+            if (action === "block") toast.success("Report submitted. User blocked.");
+            else toast.success("Report submitted.");
+            setReportModal(null);
+          }}
           onReportError={(msg) => toast.error(msg)}
         />
       )}
@@ -515,6 +527,11 @@ function FeedbackOnImageContent() {
             feedbackImageUrls: feedbacks.filter((f) => f.feedbackImageUrl).map((f) => f.feedbackImageUrl),
           }}
           shareUrl={`${typeof window !== "undefined" ? window.location.origin : ""}/f?imageId=${imageId}`}
+          userFeedbackLink={
+            image.coolId && typeof window !== "undefined"
+              ? `${window.location.origin}/u/${image.coolId}`
+              : undefined
+          }
         />
       )}
     </div>

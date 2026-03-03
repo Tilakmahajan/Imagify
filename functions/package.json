@@ -1,12 +1,1 @@
-{
-  "name": "picpop-functions",
-  "description": "Cloud Functions for PicPop - push notifications on feedback",
-  "main": "index.js",
-  "engines": {
-    "node": "20"
-  },
-  "dependencies": {
-    "firebase-admin": "^12.0.0",
-    "firebase-functions": "^6.0.0"
-  }
-}
+{"name":"picpop-functions","description":"Cloud Functions for PicPop - push notifications on feedback","main":"index.js","engines":{"node":"20"},"dependencies":{"firebase-admin":"^12.0.0","firebase-functions":"^6.0.0"}}
