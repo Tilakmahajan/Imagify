@@ -581,11 +581,11 @@ export default function InboxPage() {
           singleFeedback={{ feedbackImageUrl: selectedFeedback.feedbackImageUrl }}
           allData={{
             imageUrl: selectedFeedback.feedbackImageUrl,
-            coolId: profile.coolId,
+            coolId: profile.coolId ?? "picpop",
             feedbackImageUrls: [],
           }}
-          shareUrl={`${typeof window !== "undefined" ? window.location.origin : ""}/u/${profile.coolId}`}
-          userFeedbackLink={`${typeof window !== "undefined" ? window.location.origin : ""}/u/${profile.coolId}`}
+          shareUrl={`${typeof window !== "undefined" ? window.location.origin : ""}/u/${profile.coolId ?? "picpop"}`}
+          userFeedbackLink={`${typeof window !== "undefined" ? window.location.origin : ""}/u/${profile.coolId ?? "picpop"}`}
         />
       )}
 

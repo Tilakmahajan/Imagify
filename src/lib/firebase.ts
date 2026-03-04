@@ -1,5 +1,5 @@
 import { initializeApp, getApps, type FirebaseApp } from "firebase/app";
-import { initializeAuth, getAuth, browserLocalPersistence } from "firebase/auth";
+import { initializeAuth, getAuth, browserLocalPersistence, browserPopupRedirectResolver } from "firebase/auth";
 import {
   initializeFirestore,
   getFirestore,
@@ -33,7 +33,10 @@ if (typeof window !== "undefined") {
 export const auth = app
   ? (() => {
       try {
-        return initializeAuth(app, { persistence: browserLocalPersistence });
+        return initializeAuth(app, {
+        persistence: browserLocalPersistence,
+        popupRedirectResolver: browserPopupRedirectResolver,
+      });
       } catch (e) {
         if ((e as { code?: string })?.code === "auth/already-initialized") {
           return getAuth(app);

@@ -2,17 +2,20 @@
 
 import { ShareQRCode } from "./ShareQRCode";
 
-/** Story-sized branded card for sharing. Includes QR code, watermark, attractive template. */
+/** Story-sized branded card for sharing. Includes QR code, watermark, description, attractive template. */
 export function BrandedFeedbackShareTemplate({
   feedbackImageUrl,
   coolId,
   shareUrl,
   userFeedbackLink,
+  description,
 }: {
   feedbackImageUrl: string;
   coolId?: string;
   shareUrl: string;
   userFeedbackLink?: string;
+  /** Description shown below image: e.g. "Anonymous response shared via picpop" */
+  description?: string;
 }) {
   const qrUrl = userFeedbackLink || shareUrl;
   return (
@@ -85,6 +88,7 @@ export function BrandedFeedbackShareTemplate({
           overflow: "hidden",
           background: "rgba(0,0,0,0.4)",
           display: "flex",
+          flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
           minHeight: 280,
@@ -95,10 +99,25 @@ export function BrandedFeedbackShareTemplate({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={feedbackImageUrl}
-          alt="Feedback"
+          alt="Anonymous feedback"
           crossOrigin="anonymous"
           style={{ width: "100%", height: "100%", objectFit: "contain" }}
         />
+        {description && (
+          <div
+            style={{
+              padding: "12px 16px",
+              background: "rgba(0,0,0,0.5)",
+              borderTop: "1px solid rgba(255,255,255,0.08)",
+              width: "100%",
+              textAlign: "center",
+            }}
+          >
+            <p style={{ margin: 0, fontSize: 12, fontWeight: 700, color: "rgba(255,255,255,0.9)", lineHeight: 1.4 }}>
+              {description}
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Footer: QR + branding */}

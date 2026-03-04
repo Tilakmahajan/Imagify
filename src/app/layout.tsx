@@ -8,6 +8,7 @@ import { AuthRedirect } from "@/components/AuthRedirect";
 import { ToastProvider } from "@/lib/toast-context";
 import { GlobalLoader } from "@/components/GlobalLoader";
 import { NotificationTitleUpdater } from "@/components/NotificationTitleUpdater";
+import { AddToHomeScreenPrompt } from "@/components/AddToHomeScreenPrompt";
 import { ThemeProvider } from "@/lib/theme-context";
 import "./globals.css";
 

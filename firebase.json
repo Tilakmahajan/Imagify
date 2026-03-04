@@ -2,42 +2,22 @@
   "storage": { "rules": "storage.rules" },
   "firestore": { "rules": "firestore.rules", "indexes": "firestore.indexes.json" },
   "functions": { "source": "functions" },
-  "hosting": [
-    {
-      "target": "main",
-      "public": "out",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [
-        { "source": "/", "destination": "/index.html" },
-        { "source": "/admin", "destination": "/admin.html" },
-        { "source": "/dashboard", "destination": "/dashboard.html" },
-        { "source": "/login", "destination": "/login.html" },
-        { "source": "/create-id", "destination": "/create-id.html" },
-        { "source": "/inbox", "destination": "/inbox.html" },
-        { "source": "/f", "destination": "/f.html" },
-        { "source": "/feedback", "destination": "/feedback.html" },
-        { "source": "/u", "destination": "/u.html" },
-        { "source": "/u/**", "destination": "/u.html" },
-        { "source": "**", "destination": "/404.html" }
-      ]
-    },
-    {
-      "target": "admin",
-      "public": "out",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [
-        { "source": "/", "destination": "/admin.html" },
-        { "source": "/admin", "destination": "/admin.html" },
-        { "source": "/dashboard", "destination": "/dashboard.html" },
-        { "source": "/login", "destination": "/login.html" },
-        { "source": "/create-id", "destination": "/create-id.html" },
-        { "source": "/inbox", "destination": "/inbox.html" },
-        { "source": "/f", "destination": "/f.html" },
-        { "source": "/feedback", "destination": "/feedback.html" },
-        { "source": "/u", "destination": "/u.html" },
-        { "source": "/u/**", "destination": "/u.html" },
-        { "source": "**", "destination": "/404.html" }
-      ]
-    }
-  ]
+  "hosting": {
+    "site": "imagify-5f3d5",
+    "public": "out",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/", "destination": "/index.html" },
+      { "source": "/admin", "destination": "/admin.html" },
+      { "source": "/dashboard", "destination": "/dashboard.html" },
+      { "source": "/login", "destination": "/login.html" },
+      { "source": "/create-id", "destination": "/create-id.html" },
+      { "source": "/inbox", "destination": "/inbox.html" },
+      { "source": "/f", "destination": "/f.html" },
+      { "source": "/feedback", "destination": "/feedback.html" },
+      { "source": "/u", "destination": "/u.html" },
+      { "source": "/u/**", "destination": "/u.html" },
+      { "source": "**", "destination": "/404.html" }
+    ]
+  }
 }

@@ -45,6 +45,7 @@ export function ShareButtons({
   imageUrl,
   title = "Check out this on PicPop!",
   snapshotData,
+  userFeedbackLink,
   simple = false,
 }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false);

@@ -1,6 +1,28 @@
 "use client";
 
-import { Wand2, Sparkles } from "lucide-react";
+import { useState } from "react";
+import { Wand2, Copy, ExternalLink } from "lucide-react";
+
+export type AiImageProvider = "chatgpt" | "gemini" | "bing" | "leonardo" | "ideogram";
+
+const PROVIDERS: {
+  id: AiImageProvider;
+  label: string;
+  url: (prompt: string) => string;
+  prefill: boolean;
+  accent: string;
+}[] = [
+  { id: "chatgpt", label: "ChatGPT", url: (p) => `https://chatgpt.com/?q=${encodeURIComponent(p)}`, prefill: true, accent: "#10a37f" },
+  { id: "gemini", label: "Gemini", url: () => "https://aistudio.google.com/app/prompts/new", prefill: false, accent: "#4285f4" },
+  { id: "bing", label: "Bing", url: () => "https://www.bing.com/images/create", prefill: false, accent: "#0078d4" },
+  { id: "leonardo", label: "Leonardo", url: () => "https://leonardo.ai/", prefill: false, accent: "var(--purple)" },
+  { id: "ideogram", label: "Ideogram", url: () => "https://ideogram.ai/", prefill: false, accent: "var(--pink)" },
+];
+
+export function getProviderUrl(prompt: string, provider: AiImageProvider): string {
+  const p = PROVIDERS.find((x) => x.id === provider);
+  return p ? p.url(prompt) : PROVIDERS[0].url(prompt);
+}
 
 const IMAGE_PROMPTS = [
   "Funny roast meme reaction with exaggerated cartoon face and bold text, viral social media style",
@@ -15,104 +37,136 @@ const IMAGE_PROMPTS = [
   "Congrats image with confetti and celebration vibes, bold colors, social media ready",
 ];
 
-export function AiImagePrompts({ onPromptClick }: { onPromptClick: (prompt: string) => void }) {
+export function AiImagePrompts({
+  onPromptClick,
+  onPromptCopy,
+}: {
+  onPromptClick: (prompt: string, provider: AiImageProvider) => void;
+  onPromptCopy?: (prompt: string) => void;
+}) {
+  const [lastPrompt, setLastPrompt] = useState("Funny feedback or roast reaction image, viral meme style, bold typography");
+
+  const handlePromptTap = (prompt: string) => {
+    setLastPrompt(prompt);
+    navigator.clipboard.writeText(prompt);
+    onPromptCopy?.(prompt);
+  };
+
+  const handleProviderTap = (provider: (typeof PROVIDERS)[number]) => {
+    onPromptClick(lastPrompt, provider.id);
+  };
+
   return (
     <section className="mt-12">
       <style>{`
-        @keyframes ai-glow {
-          0%, 100% { box-shadow: 0 8px 32px rgba(124,58,255,0.25); }
-          50% { box-shadow: 0 8px 40px rgba(124,58,255,0.4), 0 0 60px rgba(124,58,255,0.15); }
-        }
-        @keyframes ai-shimmer {
-          0% { background-position: 200% 0; }
-          100% { background-position: -200% 0; }
-        }
         @keyframes ai-card-enter {
-          from { opacity: 0; transform: translateY(12px) scale(0.96); }
-          to { opacity: 1; transform: translateY(0) scale(1); }
+          from { opacity: 0; transform: translateY(8px); }
+          to { opacity: 1; transform: translateY(0); }
         }
-        @keyframes ai-float {
-          0%, 100% { transform: translateY(0); }
-          50% { transform: translateY(-4px); }
-        }
-        .ai-glow { animation: ai-glow 3s ease-in-out infinite; }
-        .ai-card-enter { animation: ai-card-enter 0.5s ease-out forwards; }
-        .ai-float { animation: ai-float 4s ease-in-out infinite; }
+        .ai-prompt-card { animation: ai-card-enter 0.4s ease-out forwards; }
       `}</style>
 
-      {/* Header block — gradient + glow */}
+      {/* Main card */}
       <div
-        className="rounded-2xl p-6 mb-5 ai-glow relative overflow-hidden"
+        className="rounded-2xl overflow-hidden mb-6"
         style={{
-          background: "linear-gradient(145deg, rgba(124,58,255,0.18), rgba(0,200,255,0.1))",
-          border: "1px solid rgba(124,58,255,0.35)",
+          background: "var(--bg-card)",
+          border: "1px solid var(--border)",
+          boxShadow: "0 4px 24px rgba(0,0,0,0.15)",
         }}
       >
-        {/* Shimmer overlay */}
+        {/* Header */}
         <div
-          className="absolute inset-0 opacity-30 pointer-events-none"
-          style={{
-            background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent)",
-            backgroundSize: "200% 100%",
-            animation: "ai-shimmer 8s linear infinite",
+          className="flex items-center gap-3 px-5 py-4"
+          style={{ borderBottom: "1px solid var(--border)",
+            background: "linear-gradient(135deg, rgba(124,58,255,0.08), rgba(0,200,255,0.04))",
           }}
-        />
-        <div className="flex items-start gap-4 relative">
+        >
           <div
-            className="shrink-0 p-3 rounded-2xl ai-float"
+            className="shrink-0 w-10 h-10 rounded-xl flex items-center justify-center"
             style={{
               background: "linear-gradient(135deg, var(--purple), var(--blue))",
-              boxShadow: "0 8px 24px rgba(124,58,255,0.4)",
+              boxShadow: "0 4px 20px rgba(124,58,255,0.4)",
             }}
           >
-            <Wand2 className="w-6 h-6 text-white" />
+            <Wand2 className="w-5 h-5 text-white" />
           </div>
-          <div className="flex-1 min-w-0">
-            <h3 className="font-black text-lg text-[var(--text-primary)]">Generate image with AI</h3>
-            <p className="text-sm text-[var(--text-muted)] font-semibold mt-1">
-              Tap a prompt → opens ChatGPT (app on mobile). Paste & generate, then upload here.
+          <div className="min-w-0">
+            <h3 className="font-black text-base text-[var(--text-primary)]">Generate image with AI</h3>
+            <p className="text-xs text-[var(--text-muted)] font-semibold mt-0.5">
+              1. Copy a prompt · 2. Open a provider · 3. Paste & generate · 4. Upload here
             </p>
-            <button
-              type="button"
-              onClick={() => onPromptClick("Funny feedback or roast reaction image, viral meme style, bold typography")}
-              className="mt-4 w-full py-3.5 px-5 rounded-xl font-bold text-sm flex items-center justify-center gap-2.5 transition-all duration-300 hover:scale-[1.03] active:scale-[0.97] touch-manipulation"
-              style={{
-                background: "linear-gradient(135deg, var(--purple), var(--blue))",
-                color: "white",
-                boxShadow: "0 4px 24px rgba(124,58,255,0.4)",
-                touchAction: "manipulation",
-              }}
-            >
-              <Sparkles className="w-5 h-5" />
-              Open ChatGPT & generate image
-            </button>
           </div>
         </div>
-      </div>
 
-      {/* Prompts grid — staggered animation */}
-      <p className="text-[11px] font-bold text-[var(--text-muted)] mb-3 uppercase tracking-wider">
-        Tap any prompt to copy & open
-      </p>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        {IMAGE_PROMPTS.map((prompt, i) => (
-          <button
-            key={i}
-            type="button"
-            onClick={() => onPromptClick(prompt)}
-            className="ai-card-enter text-left p-4 rounded-xl transition-all duration-300 hover:scale-[1.02] hover:-translate-y-0.5 active:scale-[0.98] touch-manipulation group"
-            style={{
-              background: "var(--bg-card)",
-              border: "1px solid var(--border)",
-              boxShadow: "0 2px 12px rgba(0,0,0,0.06)",
-              animationDelay: `${i * 50}ms`,
-            }}
-          >
-            <span className="text-sm font-semibold text-[var(--text-primary)] group-hover:text-[var(--purple)] transition-colors line-clamp-2">
-              {prompt}
-            </span>
-          </button>
-        ))}
+        {/* Content */}
+        <div className="p-5 space-y-5">
+          {/* Prompts */}
+          <div>
+            <p className="text-[11px] font-bold text-[var(--text-muted)] mb-2.5 uppercase tracking-wider flex items-center gap-1.5">
+              <Copy className="w-3.5 h-3.5" /> Tap to copy prompt
+            </p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              {IMAGE_PROMPTS.map((prompt, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => handlePromptTap(prompt)}
+                  className="ai-prompt-card text-left p-3.5 rounded-xl transition-all duration-200 hover:bg-white/5 active:scale-[0.98] touch-manipulation group"
+                  style={{
+                    background: "rgba(255,255,255,0.02)",
+                    border: "1px solid var(--border)",
+                    animationDelay: `${Math.min(i * 30, 200)}ms`,
+                  }}
+                >
+                  <span className="text-sm font-semibold text-[var(--text-primary)] group-hover:text-[var(--purple)] transition-colors line-clamp-2 leading-snug">
+                    {prompt}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Providers */}
+          <div>
+            <p className="text-[11px] font-bold text-[var(--text-muted)] mb-2.5 uppercase tracking-wider flex items-center gap-1.5">
+              <ExternalLink className="w-3.5 h-3.5" /> Open with
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {PROVIDERS.map((p) => {
+                const isBrand = !p.accent.startsWith("var(");
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => handleProviderTap(p)}
+                    className="py-2.5 px-4 rounded-xl font-bold text-xs flex items-center gap-2 transition-all duration-200 hover:scale-[1.02] active:scale-[0.98] touch-manipulation"
+                    style={
+                      isBrand
+                        ? {
+                            background: p.accent,
+                            color: "#fff",
+                            border: "none",
+                            boxShadow: `0 4px 12px ${p.accent}50`,
+                          }
+                        : {
+                            background: "var(--bg-secondary)",
+                            color: "var(--text-primary)",
+                            border: "1px solid var(--border)",
+                          }
+                    }
+                  >
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ background: isBrand ? "rgba(255,255,255,0.5)" : p.accent }}
+                    />
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
       </div>
     </section>
   );

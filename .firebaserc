@@ -1,13 +1,5 @@
 {
   "projects": {
     "default": "imagify-5f3d5"
-  },
-  "targets": {
-    "imagify-5f3d5": {
-      "hosting": {
-        "main": ["imagify-5f3d5"],
-        "admin": ["imagify-admin"]
-      }
-    }
   }
 }

@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, Share2 } from "lucide-react";
+import { X, Share2, Download } from "lucide-react";
 
-const STORAGE_KEY = "picpop-add-to-home-dismissed";
-const DELAY_MS = 3000; // Show after 3 seconds on page
+const STORAGE_KEY_DISMISSED = "picpop-add-to-home-dismissed";
+const STORAGE_KEY_SHOW_COUNT = "picpop-add-to-home-show-count";
+const BASE_DELAY_MS = 10000; // First show after 10 seconds
 
 function isStandalone(): boolean {
   if (typeof window === "undefined") return false;
@@ -25,27 +26,60 @@ function isMobile(): boolean {
   return isIos() || isAndroid();
 }
 
+type BeforeInstallPromptEvent = Event & { prompt: () => Promise<{ outcome: string }> };
+
 export function AddToHomeScreenPrompt() {
   const [visible, setVisible] = useState(false);
   const [mounted, setMounted] = useState(false);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [installing, setInstalling] = useState(false);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
   useEffect(() => {
+    if (typeof window === "undefined") return;
+    const handler = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e as BeforeInstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", handler);
+    return () => window.removeEventListener("beforeinstallprompt", handler);
+  }, []);
+
+  useEffect(() => {
     if (!mounted || typeof window === "undefined") return;
     if (isStandalone()) return; // Already added to home screen
-    if (localStorage.getItem(STORAGE_KEY) === "1") return; // User dismissed
+    if (localStorage.getItem(STORAGE_KEY_DISMISSED) === "1") return; // User chose "Don't show again"
     if (!isMobile()) return; // Only show on mobile for "Add to Home Screen"
 
-    const t = setTimeout(() => setVisible(true), DELAY_MS);
+    const count = parseInt(localStorage.getItem(STORAGE_KEY_SHOW_COUNT) || "0", 10);
+    const delayMs = BASE_DELAY_MS * Math.pow(2, count); // 10s, 20s, 40s, 80s, 160s...
+
+    const t = setTimeout(() => setVisible(true), delayMs);
     return () => clearTimeout(t);
   }, [mounted]);
 
   const handleDismiss = (dontShowAgain = false) => {
     setVisible(false);
-    if (dontShowAgain) localStorage.setItem(STORAGE_KEY, "1");
+    if (dontShowAgain) {
+      localStorage.setItem(STORAGE_KEY_DISMISSED, "1");
+    } else {
+      const count = parseInt(localStorage.getItem(STORAGE_KEY_SHOW_COUNT) || "0", 10);
+      localStorage.setItem(STORAGE_KEY_SHOW_COUNT, String(count + 1));
+    }
+  };
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    setInstalling(true);
+    try {
+      await deferredPrompt.prompt();
+      handleDismiss(false);
+    } finally {
+      setInstalling(false);
+    }
   };
 
   if (!visible) return null;
@@ -86,7 +120,27 @@ export function AddToHomeScreenPrompt() {
             Get quick access — add PicPop to your home screen like a bookmark. Opens in browser, no app store.
           </p>
 
-          {isIos() && (
+          {deferredPrompt ? (
+            <button
+              type="button"
+              onClick={handleInstall}
+              disabled={installing}
+              className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-95 disabled:opacity-60"
+              style={{
+                background: "linear-gradient(135deg, var(--pink), var(--purple))",
+                boxShadow: "0 4px 20px rgba(255,61,127,0.35)",
+              }}
+            >
+              {installing ? (
+                <span className="animate-pulse">Installing...</span>
+              ) : (
+                <>
+                  <Download className="w-5 h-5" />
+                  Install App
+                </>
+              )}
+            </button>
+          ) : isIos() ? (
             <div className="rounded-xl p-4 bg-white/5 border border-white/10 space-y-2">
               <p className="text-xs font-bold text-white/60 uppercase tracking-wider">iPhone / iPad</p>
               <ol className="text-sm text-white/90 font-semibold space-y-1.5 list-decimal list-inside">
@@ -95,9 +149,7 @@ export function AddToHomeScreenPrompt() {
                 <li>Tap <strong>Add</strong> in the top right</li>
               </ol>
             </div>
-          )}
-
-          {isAndroid() && (
+          ) : isAndroid() ? (
             <div className="rounded-xl p-4 bg-white/5 border border-white/10 space-y-2">
               <p className="text-xs font-bold text-white/60 uppercase tracking-wider">Android (Chrome)</p>
               <ol className="text-sm text-white/90 font-semibold space-y-1.5 list-decimal list-inside">
@@ -109,7 +161,7 @@ export function AddToHomeScreenPrompt() {
                 Opens in browser — no app store download.
               </p>
             </div>
-          )}
+          ) : null}
         </div>
 
         {/* Footer */}

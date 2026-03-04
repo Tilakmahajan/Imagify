@@ -10,7 +10,7 @@ import { uploadFeedbackImage } from "@/lib/image-upload";
 import { useToast } from "@/lib/toast-context";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { AiImagePrompts } from "@/components/AiImagePrompts";
+import { AiImagePrompts, getProviderUrl, type AiImageProvider } from "@/components/AiImagePrompts";
 import { ExploreImages } from "@/components/ExploreImages";
 
 const SIGN_IN_NUDGE_INTERVAL_MS = 20_000;
@@ -260,18 +260,28 @@ function UserFeedbackContent() {
     );
   }
 
-  const openAiImageWithPrompt = (prompt: string) => {
+  const openAiImageWithPrompt = (prompt: string, provider: AiImageProvider) => {
     navigator.clipboard.writeText(prompt).then(() => {
-      toast.success("Copied! Opening ChatGPT...");
+      const labels: Record<AiImageProvider, string> = {
+        chatgpt: "ChatGPT",
+        gemini: "Gemini",
+        bing: "Bing",
+        leonardo: "Leonardo",
+        ideogram: "Ideogram",
+      };
+      toast.success(`Copied! Opening ${labels[provider]}...`);
     });
+    const url = getProviderUrl(prompt, provider);
     const isMobile = typeof window !== "undefined" && (window.innerWidth < 768 || /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent));
-    const base = "https://chatgpt.com";
-    const url = `${base}/?q=${encodeURIComponent(prompt)}`;
     if (isMobile) {
       window.location.href = url;
     } else {
       window.open(url, "_blank", "noopener,noreferrer");
     }
+  };
+
+  const handlePromptCopy = () => {
+    toast.success("Copied! Choose a provider to generate.");
   };
 
   const RESPONSE_PREVIEWS = [
@@ -313,7 +323,11 @@ function UserFeedbackContent() {
           </Link>
           <div className="flex items-center gap-2">
             <ThemeToggle />
-            <Link href="/login" className="text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">Sign in</Link>
+            {authUser ? (
+              <Link href="/dashboard" className="text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">Dashboard</Link>
+            ) : (
+              <Link href="/login" className="text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">Sign in</Link>
+            )}
           </div>
         </nav>
       </header>
@@ -425,14 +439,14 @@ function UserFeedbackContent() {
                 Takes 10 seconds.
               </p>
               <Link
-                href="/login"
+                href={authUser ? "/dashboard" : "/login"}
                 className="block w-full py-3.5 rounded-xl font-black text-white text-center"
                 style={{
                   background: "linear-gradient(135deg, var(--pink), var(--purple))",
                   boxShadow: "0 4px 20px rgba(255,61,127,0.3)",
                 }}
               >
-                Get my free link →
+                {authUser ? "Go to Dashboard →" : "Get my free link →"}
               </Link>
               <button
                 type="button"
@@ -572,7 +586,7 @@ function UserFeedbackContent() {
           disabled={submitting}
         />
 
-        <AiImagePrompts onPromptClick={openAiImageWithPrompt} />
+        <AiImagePrompts onPromptClick={openAiImageWithPrompt} onPromptCopy={handlePromptCopy} />
 
         <p className="mt-8 text-center text-sm text-[var(--text-muted)] font-semibold flex items-center justify-center gap-2">
           <Sparkles className="w-4 h-4 text-[var(--pink)]" /> Send one. @{coolId} will appreciate it.

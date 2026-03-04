@@ -38,18 +38,32 @@ export default function LoginPage() {
       }
       console.error(`[Auth] ${provider} sign-in failed:`, err);
       if (msg.includes("auth/popup-blocked") || msg.includes("popup")) {
-        toast.info("Pop-up was blocked. Redirecting to sign-in...");
+        toast.info("Pop-up was blocked. Allow popups or try again (will use redirect).");
       } else if (msg.includes("auth/unauthorized-domain")) {
-        toast.error("This domain isn't authorized. Add localhost to Firebase Console → Auth → Authorized domains.");
+        toast.error("Domain not authorized. Add this URL to Firebase Console → Authentication → Settings → Authorized domains.");
       } else if (msg.includes("auth/") || msg.includes("network")) {
-        toast.error(`Sign-in failed: ${msg.slice(0, 60)}`);
+        toast.error(`Sign-in failed: ${msg.slice(0, 80)}`);
       } else {
-        toast.error("Sign-in failed. Try Incognito (extensions can block login).");
+        toast.error(`Sign-in failed: ${msg.slice(0, 80)}`);
       }
     }
   };
 
-  if (loading) return null;
+  // Show loader: initial auth load, or user signed in (waiting for profile or redirecting)
+  const isRedirecting = !!user;
+  if (loading || isRedirecting) {
+    return (
+      <div className="min-h-screen bg-[var(--bg-primary)] flex flex-col items-center justify-center" style={{ fontFamily: "'Nunito', var(--font-nunito), sans-serif" }}>
+        <div
+          className="w-12 h-12 rounded-full border-2 border-transparent animate-spin"
+          style={{ borderTopColor: "var(--pink)", borderRightColor: "var(--purple)" }}
+        />
+        <p className="mt-4 text-sm font-bold text-[var(--text-muted)]">
+          {isRedirecting ? "Taking you to dashboard..." : "Loading..."}
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div

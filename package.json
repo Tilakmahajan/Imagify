@@ -13,8 +13,7 @@
     "deploy": "npm run build && firebase deploy",
     "deploy:all": "npm run build && firebase deploy",
     "deploy:hosting": "npm run build && firebase deploy --only hosting",
-    "deploy:hosting:main": "npm run build && firebase deploy --only hosting:main",
-    "deploy:admin": "npm run build && firebase deploy --only hosting:admin",
+    "deploy:hosting:main": "npm run build && firebase deploy --only hosting",
     "deploy:functions": "firebase deploy --only functions",
     "deploy:firestore": "firebase deploy --only firestore"
   },

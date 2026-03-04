@@ -2,6 +2,35 @@
 
 import { useEffect, useState, useRef } from "react";
 import { ImageIcon, Clock, Loader2 } from "lucide-react";
+
+function LazyImage({ src, alt, className = "" }: { src: string; alt: string; className?: string }) {
+  const [isVisible, setIsVisible] = useState(false);
+  const imgRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = imgRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) setIsVisible(true);
+      },
+      { rootMargin: "80px", threshold: 0.01 }
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div ref={imgRef} className={`w-full h-full min-h-0 overflow-hidden ${className}`}>
+      {isVisible ? (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img src={src} alt={alt} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+      ) : (
+        <div className="w-full h-full min-h-[60px] bg-[var(--bg-card)] animate-pulse" />
+      )}
+    </div>
+  );
+}
 import {
   collection,
   query,
@@ -98,10 +127,15 @@ export function ExploreImages({
           limit(60)
         );
         const snap = await getDocs(q);
+        const seenUrls = new Set<string>();
         const items = snap.docs
           .filter((d) => {
             const data = d.data();
-            return data.deleted !== true && data.feedbackImageUrl;
+            if (data.deleted === true || !data.feedbackImageUrl) return false;
+            const url = data.feedbackImageUrl as string;
+            if (seenUrls.has(url)) return false; // Dedupe: same image shared by multiple users appears only once
+            seenUrls.add(url);
+            return true;
           })
           .map((d) => {
             const data = d.data();
@@ -244,12 +278,10 @@ export function ExploreImages({
                 boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
               }}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
+              <LazyImage
                 src={item.type === "meme" ? item.url : item.feedbackImageUrl}
                 alt={item.type === "meme" ? item.name : "Shared response"}
-                className="w-full h-full object-cover"
-                loading="lazy"
+                className="w-full h-full"
               />
               {submittingId === item.id && (
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
@@ -289,12 +321,10 @@ export function ExploreImages({
                 boxShadow: "0 2px 8px rgba(0,0,0,0.1)",
               }}
             >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
+              <LazyImage
                 src={meme.url}
                 alt={meme.name}
-                className="w-full h-full object-cover max-w-full max-h-full"
-                loading="lazy"
+                className="w-full h-full max-w-full max-h-full"
               />
               {submittingId === meme.id && (
                 <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
