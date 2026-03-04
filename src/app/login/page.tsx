@@ -32,7 +32,7 @@ export default function LoginPage() {
       console.log("[Login] handleSignIn:", provider, "completed (popup/redirect should have opened)");
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("auth/popup-closed-by-user")) {
+      if (msg.includes("auth/popup-closed-by-user") || msg.includes("auth/cancelled-popup-request")) {
         toast.info("Sign-in cancelled.");
         return;
       }

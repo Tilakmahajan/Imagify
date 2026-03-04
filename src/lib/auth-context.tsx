@@ -207,11 +207,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         console.log("[Auth] signInWithProvider(google): popup succeeded", cred.user.email);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.warn("[Auth] signInWithProvider(google): popup failed", err);
+        const isUserCancelled =
+          msg.includes("auth/cancelled-popup-request") || msg.includes("auth/popup-closed-by-user");
         if (msg.includes("auth/popup-blocked") || (msg.includes("popup") && msg.includes("blocked"))) {
           console.log("[Auth] signInWithProvider(google): popup blocked, falling back to redirect");
           await signInWithRedirect(auth, provider);
+        } else if (isUserCancelled) {
+          throw err; // UI will show friendly "Sign-in cancelled" message
         } else {
+          console.warn("[Auth] signInWithProvider(google): popup failed", err);
           throw err;
         }
       }

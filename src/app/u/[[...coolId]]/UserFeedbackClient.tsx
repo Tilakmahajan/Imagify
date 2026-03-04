@@ -10,7 +10,7 @@ import { uploadFeedbackImage } from "@/lib/image-upload";
 import { useToast } from "@/lib/toast-context";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
-import { AiImagePrompts, getProviderUrl, type AiImageProvider } from "@/components/AiImagePrompts";
+import { AiImagePrompts, openProvider, type AiImageProvider } from "@/components/AiImagePrompts";
 import { ExploreImages } from "@/components/ExploreImages";
 
 const SIGN_IN_NUDGE_INTERVAL_MS = 20_000;
@@ -265,19 +265,11 @@ function UserFeedbackContent() {
       const labels: Record<AiImageProvider, string> = {
         chatgpt: "ChatGPT",
         gemini: "Gemini",
-        bing: "Bing",
-        leonardo: "Leonardo",
-        ideogram: "Ideogram",
       };
       toast.success(`Copied! Opening ${labels[provider]}...`);
     });
-    const url = getProviderUrl(prompt, provider);
     const isMobile = typeof window !== "undefined" && (window.innerWidth < 768 || /Android|iPhone|iPad|iPod|webOS/i.test(navigator.userAgent));
-    if (isMobile) {
-      window.location.href = url;
-    } else {
-      window.open(url, "_blank", "noopener,noreferrer");
-    }
+    openProvider(prompt, provider, isMobile);
   };
 
   const handlePromptCopy = () => {
@@ -581,7 +573,6 @@ function UserFeedbackContent() {
         </div>
 
         <ExploreImages
-          onSubmit={handleMemeSelectWithConfirm}
           onSubmitShared={handleSharedSelectWithConfirm}
           disabled={submitting}
         />

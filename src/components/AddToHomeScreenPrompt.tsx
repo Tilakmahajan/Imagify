@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { X, Share2, Download } from "lucide-react";
+import { X, Share2, Download, ChevronDown, ChevronUp } from "lucide-react";
 
 const STORAGE_KEY_DISMISSED = "picpop-add-to-home-dismissed";
 const STORAGE_KEY_SHOW_COUNT = "picpop-add-to-home-show-count";
@@ -33,6 +33,7 @@ export function AddToHomeScreenPrompt() {
   const [mounted, setMounted] = useState(false);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [installing, setInstalling] = useState(false);
+  const [showSteps, setShowSteps] = useState(false);
 
   useEffect(() => {
     setMounted(true);
@@ -57,7 +58,10 @@ export function AddToHomeScreenPrompt() {
     const count = parseInt(localStorage.getItem(STORAGE_KEY_SHOW_COUNT) || "0", 10);
     const delayMs = BASE_DELAY_MS * Math.pow(2, count); // 10s, 20s, 40s, 80s, 160s...
 
-    const t = setTimeout(() => setVisible(true), delayMs);
+    const t = setTimeout(() => {
+      setVisible(true);
+      setShowSteps(false);
+    }, delayMs);
     return () => clearTimeout(t);
   }, [mounted]);
 
@@ -120,6 +124,7 @@ export function AddToHomeScreenPrompt() {
             Get quick access — add PicPop to your home screen like a bookmark. Opens in browser, no app store.
           </p>
 
+          {/* Always show Install App as primary button */}
           {deferredPrompt ? (
             <button
               type="button"
@@ -140,28 +145,47 @@ export function AddToHomeScreenPrompt() {
                 </>
               )}
             </button>
-          ) : isIos() ? (
-            <div className="rounded-xl p-4 bg-white/5 border border-white/10 space-y-2">
-              <p className="text-xs font-bold text-white/60 uppercase tracking-wider">iPhone / iPad</p>
-              <ol className="text-sm text-white/90 font-semibold space-y-1.5 list-decimal list-inside">
-                <li>Tap the <strong>Share</strong> button (square with arrow) at the bottom of Safari</li>
-                <li>Scroll down and tap <strong>Add to Home Screen</strong></li>
-                <li>Tap <strong>Add</strong> in the top right</li>
-              </ol>
-            </div>
-          ) : isAndroid() ? (
-            <div className="rounded-xl p-4 bg-white/5 border border-white/10 space-y-2">
-              <p className="text-xs font-bold text-white/60 uppercase tracking-wider">Android (Chrome)</p>
-              <ol className="text-sm text-white/90 font-semibold space-y-1.5 list-decimal list-inside">
-                <li>Tap the <strong>menu</strong> (⋮) in the top right</li>
-                <li>Tap <strong>Add to Home screen</strong></li>
-                <li>Confirm — a shortcut (bookmark) will appear on your home screen</li>
-              </ol>
-              <p className="text-xs text-white/50 mt-2">
-                Opens in browser — no app store download.
-              </p>
-            </div>
-          ) : null}
+          ) : (
+            <button
+              type="button"
+              onClick={() => setShowSteps((s) => !s)}
+              className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-95"
+              style={{
+                background: "linear-gradient(135deg, var(--pink), var(--purple))",
+                boxShadow: "0 4px 20px rgba(255,61,127,0.35)",
+              }}
+            >
+              <Download className="w-5 h-5" />
+              Add to Home Screen
+              {showSteps ? <ChevronUp className="w-5 h-5" /> : <ChevronDown className="w-5 h-5" />}
+            </button>
+          )}
+
+          {/* Steps: expandable when no Install App API (iOS/Android) */}
+          {!deferredPrompt && showSteps && (
+            isIos() ? (
+              <div className="rounded-xl p-4 bg-white/5 border border-white/10 space-y-2">
+                <p className="text-xs font-bold text-white/60 uppercase tracking-wider">iPhone / iPad</p>
+                <ol className="text-sm text-white/90 font-semibold space-y-1.5 list-decimal list-inside">
+                  <li>Tap the <strong>Share</strong> button (square with arrow) at the bottom of Safari</li>
+                  <li>Scroll down and tap <strong>Add to Home Screen</strong></li>
+                  <li>Tap <strong>Add</strong> in the top right</li>
+                </ol>
+              </div>
+            ) : isAndroid() ? (
+              <div className="rounded-xl p-4 bg-white/5 border border-white/10 space-y-2">
+                <p className="text-xs font-bold text-white/60 uppercase tracking-wider">Android (Chrome)</p>
+                <ol className="text-sm text-white/90 font-semibold space-y-1.5 list-decimal list-inside">
+                  <li>Tap the <strong>menu</strong> (⋮) in the top right</li>
+                  <li>Tap <strong>Add to Home screen</strong></li>
+                  <li>Confirm — a shortcut (bookmark) will appear on your home screen</li>
+                </ol>
+                <p className="text-xs text-white/50 mt-2">
+                  Opens in browser — no app store download.
+                </p>
+              </div>
+            ) : null
+          )}
         </div>
 
         {/* Footer */}

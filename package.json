@@ -10,12 +10,12 @@
     "cap:sync": "npm run build && npx cap sync",
     "cap:android": "npx cap open android",
     "cap:ios": "npx cap open ios",
-    "deploy": "npm run build && firebase deploy",
-    "deploy:all": "npm run build && firebase deploy",
-    "deploy:hosting": "npm run build && firebase deploy --only hosting",
-    "deploy:hosting:main": "npm run build && firebase deploy --only hosting",
-    "deploy:functions": "firebase deploy --only functions",
-    "deploy:firestore": "firebase deploy --only firestore"
+    "deploy": "npm run build && npx firebase deploy",
+    "deploy:all": "npm run build && npx firebase deploy",
+    "deploy:hosting": "npm run build && npx firebase deploy --only hosting",
+    "deploy:hosting:main": "npm run build && npx firebase deploy --only hosting",
+    "deploy:functions": "npx firebase deploy --only functions",
+    "deploy:firestore": "npx firebase deploy --only firestore"
   },
   "dependencies": {
     "@capacitor/android": "^8.1.0",
@@ -33,6 +33,7 @@
     "react-dom": "19.0.0"
   },
   "devDependencies": {
+    "firebase-tools": "^13.0.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",

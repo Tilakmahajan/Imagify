@@ -1,8 +1,11 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   output: "export",
+  outputFileTracingRoot: path.join(__dirname),
   reactStrictMode: false,
+  devIndicators: false,
   eslint: { ignoreDuringBuilds: true },
   serverExternalPackages: ["@grpc/grpc-js", "@grpc/proto-loader"],
   webpack: (config, { dev }) => {
