@@ -9,6 +9,7 @@ export function ShareCardTemplate({
   feedbackImageUrls = [],
   shareUrl,
   userFeedbackLink,
+  useDataUrls = false,
 }: {
   imageUrl: string;
   coolId: string;
@@ -16,6 +17,8 @@ export function ShareCardTemplate({
   shareUrl: string;
   /** Full URL for QR (user's link for viral growth) */
   userFeedbackLink?: string;
+  /** When true, images are data URLs - omit crossOrigin to avoid iOS Safari canvas issues */
+  useDataUrls?: boolean;
 }) {
   const fullUrl = shareUrl.startsWith("http") ? shareUrl : `https://picpop.me${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`;
   const qrUrl = userFeedbackLink || fullUrl;
@@ -94,7 +97,12 @@ export function ShareCardTemplate({
         }}
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src={imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+        <img
+          src={imageUrl}
+          alt=""
+          {...(useDataUrls ? {} : { crossOrigin: "anonymous" })}
+          style={{ width: "100%", height: "100%", objectFit: "contain" }}
+        />
       </div>
 
       {/* Reactions strip */}
@@ -107,7 +115,7 @@ export function ShareCardTemplate({
                 key={i}
                 src={url}
                 alt=""
-                crossOrigin="anonymous"
+                {...(useDataUrls ? {} : { crossOrigin: "anonymous" })}
                 style={{
                   width: 44,
                   height: 44,

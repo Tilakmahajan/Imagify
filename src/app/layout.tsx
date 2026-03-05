@@ -60,8 +60,8 @@ export default function RootLayout({
         </AuthProvider>
         </ThemeProvider>
         <Script
-          src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9913239924968431"
-          strategy="lazyOnload"
+          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${process.env.NEXT_PUBLIC_ADSENSE_CLIENT || "ca-pub-9913239924968431"}`}
+          strategy="beforeInteractive"
           crossOrigin="anonymous"
         />
       </body>

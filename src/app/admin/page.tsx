@@ -12,18 +12,42 @@ import {
   ArrowLeft,
   RefreshCw,
   Unlock,
+  ImagePlus,
+  Trash2,
+  FolderOpen,
+  Plus,
+  Upload,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { useToast } from "@/lib/toast-context";
 
-type Tab = "users" | "reports" | "blocked" | "feedbacks";
+type Tab = "users" | "reports" | "blocked" | "feedbacks" | "categories" | "browseImages";
+
+interface Category {
+  id: string;
+  name: string;
+  order?: number;
+  createdAt?: string;
+}
+
+interface BrowseImage {
+  id: string;
+  imageUrl: string;
+  name?: string;
+  source?: "admin" | "shared";
+  feedbackId?: string;
+  categoryIds?: string[];
+  createdAt?: string;
+}
 
 interface AdminData {
   users: Array<Record<string, unknown> & { id: string }>;
   reports: Array<Record<string, unknown> & { id: string }>;
   blockedIps: Array<Record<string, unknown> & { id: string }>;
   feedbacks: Array<Record<string, unknown> & { id: string }>;
+  categories?: Category[];
+  browseImages?: BrowseImage[];
 }
 
 function formatDate(val: unknown): string {
@@ -46,6 +70,19 @@ export default function AdminPage() {
   const [unblocking, setUnblocking] = useState<string | null>(null);
   const [bootstrapKey, setBootstrapKey] = useState("");
   const [bootstrapping, setBootstrapping] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState("");
+  const [addingCategory, setAddingCategory] = useState(false);
+  const [deletingCategoryId, setDeletingCategoryId] = useState<string | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [newImageName, setNewImageName] = useState("");
+  const [newImageCategoryIds, setNewImageCategoryIds] = useState<string[]>([]);
+  const [addingImage, setAddingImage] = useState(false);
+  const [addingFromFeedbackId, setAddingFromFeedbackId] = useState<string | null>(null);
+  const [addFromFeedbackId, setAddFromFeedbackId] = useState<string | null>(null);
+  const [addFromFeedbackCategoryIds, setAddFromFeedbackCategoryIds] = useState<string[]>([]);
+  const [editingImageId, setEditingImageId] = useState<string | null>(null);
+  const [editCategoryIds, setEditCategoryIds] = useState<string[]>([]);
+  const [deletingImageId, setDeletingImageId] = useState<string | null>(null);
 
   const fetchData = async () => {
     if (!user) return;
@@ -127,6 +164,167 @@ export default function AdminPage() {
       setUnblocking(null);
     }
   };
+
+  const handleAddCategory = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const name = newCategoryName.trim();
+    if (!name) {
+      toast.error("Enter category name");
+      return;
+    }
+    setAddingCategory(true);
+    try {
+      const { httpsCallable } = await import("firebase/functions");
+      const { getAppFunctions } = await import("@/lib/functions");
+      const functions = getAppFunctions();
+      if (!functions) throw new Error("Firebase not configured");
+      const fn = httpsCallable<{ name: string }, { success: boolean }>(functions, "adminAddCategory");
+      await fn({ name });
+      toast.success("Category added");
+      setNewCategoryName("");
+      fetchData();
+    } catch (err) {
+      toast.error("Failed to add category");
+    } finally {
+      setAddingCategory(false);
+    }
+  };
+
+  const handleDeleteCategory = async (categoryId: string) => {
+    setDeletingCategoryId(categoryId);
+    try {
+      const { httpsCallable } = await import("firebase/functions");
+      const { getAppFunctions } = await import("@/lib/functions");
+      const functions = getAppFunctions();
+      if (!functions) throw new Error("Firebase not configured");
+      const fn = httpsCallable<{ categoryId: string }, { success: boolean }>(functions, "adminDeleteCategory");
+      await fn({ categoryId });
+      toast.success("Category deleted");
+      fetchData();
+    } catch (err) {
+      toast.error("Failed to delete category");
+    } finally {
+      setDeletingCategoryId(null);
+    }
+  };
+
+  const handleUploadBrowseImage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const files = selectedFiles.filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) {
+      toast.error("Select at least one image");
+      return;
+    }
+    const oversized = files.filter((f) => f.size > 10 * 1024 * 1024);
+    if (oversized.length > 0) {
+      toast.error(`${oversized.length} image(s) exceed 10MB limit`);
+      return;
+    }
+    setAddingImage(true);
+    const { httpsCallable } = await import("firebase/functions");
+    const { getAppFunctions } = await import("@/lib/functions");
+    const functions = getAppFunctions();
+    if (!functions) {
+      toast.error("Firebase not configured");
+      setAddingImage(false);
+      return;
+    }
+    const fn = httpsCallable<
+      { data: string; mimeType: string; name?: string; categoryIds?: string[] },
+      { success: boolean }
+    >(functions, "adminUploadBrowseImage");
+    let successCount = 0;
+    let failCount = 0;
+    for (let i = 0; i < files.length; i++) {
+      try {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(files[i]);
+        });
+        await fn({
+          data: base64,
+          mimeType: files[i].type,
+          name: newImageName.trim() || files[i].name.replace(/\.[^.]+$/, "") || undefined,
+          categoryIds: newImageCategoryIds,
+        });
+        successCount++;
+      } catch {
+        failCount++;
+      }
+    }
+    setAddingImage(false);
+    setSelectedFiles([]);
+    setNewImageName("");
+    setNewImageCategoryIds([]);
+    if (successCount > 0) fetchData();
+    if (failCount > 0) toast.error(`${successCount} uploaded, ${failCount} failed`);
+    else if (successCount > 0) toast.success(`${successCount} image(s) uploaded`);
+  };
+
+  const handleUpdateImageCategories = async (imageId: string) => {
+    try {
+      const { httpsCallable } = await import("firebase/functions");
+      const { getAppFunctions } = await import("@/lib/functions");
+      const functions = getAppFunctions();
+      if (!functions) throw new Error("Firebase not configured");
+      const fn = httpsCallable<
+        { imageId: string; categoryIds: string[] },
+        { success: boolean }
+      >(functions, "adminUpdateImageCategories");
+      await fn({ imageId, categoryIds: editCategoryIds });
+      toast.success("Categories updated");
+      setEditingImageId(null);
+      fetchData();
+    } catch (err) {
+      toast.error("Failed to update");
+    }
+  };
+
+  const handleAddImageFromFeedback = async (feedbackId: string, categoryIds: string[]) => {
+    setAddingFromFeedbackId(feedbackId);
+    setAddFromFeedbackId(null);
+    try {
+      const { httpsCallable } = await import("firebase/functions");
+      const { getAppFunctions } = await import("@/lib/functions");
+      const functions = getAppFunctions();
+      if (!functions) throw new Error("Firebase not configured");
+      const fn = httpsCallable<
+        { feedbackId: string; categoryIds?: string[] },
+        { success: boolean }
+      >(functions, "adminAddImageFromFeedback");
+      await fn({ feedbackId, categoryIds });
+      toast.success("Added to browse");
+      fetchData();
+    } catch (err: unknown) {
+      const e = err as { details?: { message?: string } };
+      toast.error(e?.details?.message || "Failed to add");
+    } finally {
+      setAddingFromFeedbackId(null);
+    }
+  };
+
+  const handleDeleteBrowseImage = async (imageId: string) => {
+    setDeletingImageId(imageId);
+    try {
+      const { httpsCallable } = await import("firebase/functions");
+      const { getAppFunctions } = await import("@/lib/functions");
+      const functions = getAppFunctions();
+      if (!functions) throw new Error("Firebase not configured");
+      const fn = httpsCallable<{ imageId: string }, { success: boolean }>(functions, "adminDeleteBrowseImage");
+      await fn({ imageId });
+      toast.success("Image removed");
+      fetchData();
+    } catch (err) {
+      toast.error("Failed to remove");
+    } finally {
+      setDeletingImageId(null);
+    }
+  };
+
+  const categories = data?.categories ?? [];
+  const browseImages = data?.browseImages ?? [];
 
   if (authLoading || !user) {
     return (
@@ -212,6 +410,8 @@ export default function AdminPage() {
                 { id: "reports" as Tab, label: "Reports", icon: Flag, count: data.reports.length },
                 { id: "blocked" as Tab, label: "Blocked IPs", icon: Ban, count: data.blockedIps.length },
                 { id: "feedbacks" as Tab, label: "Recent Feedbacks", icon: MessageSquare, count: data.feedbacks.length },
+                { id: "categories" as Tab, label: "Categories", icon: FolderOpen, count: categories.length },
+                { id: "browseImages" as Tab, label: "Browse Images", icon: ImagePlus, count: browseImages.length },
               ].map(({ id, label, icon: Icon, count }) => (
                 <button
                   key={id}
@@ -340,6 +540,7 @@ export default function AdminPage() {
                         <th className="p-3 font-bold">Image/Recipient</th>
                         <th className="p-3 font-bold">Deleted</th>
                         <th className="p-3 font-bold">Created</th>
+                        <th className="p-3 font-bold">Action</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -352,10 +553,275 @@ export default function AdminPage() {
                           </td>
                           <td className="p-3">{f.deleted ? "Yes" : "No"}</td>
                           <td className="p-3 text-xs text-[var(--text-muted)]">{formatDate(f.createdAt)}</td>
+                          <td className="p-3">
+                            {(f as { feedbackImageUrl?: string }).feedbackImageUrl && (
+                              addFromFeedbackId === f.id ? (
+                                <div className="flex flex-wrap gap-2 items-center">
+                                  {categories.map((c) => (
+                                    <label key={c.id} className="flex items-center gap-1 cursor-pointer text-xs">
+                                      <input
+                                        type="checkbox"
+                                        checked={addFromFeedbackCategoryIds.includes(c.id)}
+                                        onChange={(e) =>
+                                          setAddFromFeedbackCategoryIds((prev) =>
+                                            e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id)
+                                          )
+                                        }
+                                        className="rounded"
+                                      />
+                                      {c.name}
+                                    </label>
+                                  ))}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleAddImageFromFeedback(f.id, addFromFeedbackCategoryIds)}
+                                    disabled={addingFromFeedbackId === f.id}
+                                    className="px-2 py-1 rounded text-xs font-bold bg-[var(--green)] text-white"
+                                  >
+                                    {addingFromFeedbackId === f.id ? "Adding..." : "Add"}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setAddFromFeedbackId(null)}
+                                    className="px-2 py-1 rounded text-xs font-bold bg-white/20"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setAddFromFeedbackId(f.id);
+                                    setAddFromFeedbackCategoryIds([]);
+                                  }}
+                                  disabled={addingFromFeedbackId === f.id}
+                                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold text-[var(--green)] hover:bg-[var(--green)]/20 disabled:opacity-50"
+                                >
+                                  <ImagePlus className="w-3.5 h-3.5" />
+                                  {addingFromFeedbackId === f.id ? "Adding..." : "Add to Browse"}
+                                </button>
+                              )
+                            )}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+
+              {tab === "categories" && (
+                <div className="p-4">
+                  <form onSubmit={handleAddCategory} className="flex gap-2 mb-6">
+                    <input
+                      type="text"
+                      value={newCategoryName}
+                      onChange={(e) => setNewCategoryName(e.target.value)}
+                      placeholder="Category name"
+                      className="flex-1 rounded-xl px-4 py-2.5 text-sm bg-white/5 border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--pink)]"
+                      disabled={addingCategory}
+                    />
+                    <button
+                      type="submit"
+                      disabled={addingCategory || !newCategoryName.trim()}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm bg-[var(--green)] text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      <Plus className="w-4 h-4" />
+                      {addingCategory ? "Adding..." : "Add"}
+                    </button>
+                  </form>
+                  <div className="space-y-2">
+                    {categories.length === 0 ? (
+                      <p className="text-[var(--text-muted)] text-sm py-4">No categories yet. Add one above.</p>
+                    ) : (
+                      categories.map((c) => (
+                        <div
+                          key={c.id}
+                          className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-[var(--border)]"
+                        >
+                          <span className="font-bold">{c.name}</span>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteCategory(c.id)}
+                            disabled={deletingCategoryId === c.id}
+                            className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-bold text-red-400 hover:bg-red-500/20 disabled:opacity-50"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                            {deletingCategoryId === c.id ? "Deleting..." : "Delete"}
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {tab === "browseImages" && (
+                <div className="p-4">
+                  <form onSubmit={handleUploadBrowseImage} className="space-y-3 mb-6 p-4 rounded-xl bg-white/5 border border-[var(--border)]">
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <label className="flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl border-2 border-dashed border-[var(--border)] cursor-pointer hover:border-[var(--purple)] transition-colors">
+                        <Upload className="w-5 h-5 text-[var(--text-muted)]" />
+                        <span className="text-sm font-semibold">
+                          {selectedFiles.length > 0
+                            ? `${selectedFiles.length} image(s) selected`
+                            : "Choose images (multiple allowed)"}
+                        </span>
+                        <input
+                          type="file"
+                          accept="image/*"
+                          multiple
+                          className="hidden"
+                          onChange={(e) => setSelectedFiles(Array.from(e.target.files ?? []))}
+                          disabled={addingImage}
+                        />
+                      </label>
+                      <input
+                        type="text"
+                        value={newImageName}
+                        onChange={(e) => setNewImageName(e.target.value)}
+                        placeholder="Name (optional)"
+                        className="w-full sm:w-40 rounded-xl px-4 py-2.5 text-sm bg-white/5 border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--pink)]"
+                        disabled={addingImage}
+                      />
+                    </div>
+                    {categories.length > 0 && (
+                      <div className="flex flex-wrap gap-2 items-center">
+                        <span className="text-xs text-[var(--text-muted)]">Categories (select multiple):</span>
+                        {categories.map((c) => (
+                          <label key={c.id} className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={newImageCategoryIds.includes(c.id)}
+                              onChange={(e) =>
+                                setNewImageCategoryIds((prev) =>
+                                  e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id)
+                                )
+                              }
+                              className="rounded"
+                            />
+                            <span className="text-sm">{c.name}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {selectedFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2">
+                        {selectedFiles.map((f, i) => (
+                          <span
+                            key={`${f.name}-${i}`}
+                            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold bg-white/10"
+                          >
+                            {f.name}
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                              className="text-red-400 hover:text-red-300"
+                              aria-label="Remove"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={addingImage || selectedFiles.length === 0}
+                      className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm bg-[var(--green)] text-white hover:opacity-90 disabled:opacity-50"
+                    >
+                      <Upload className="w-4 h-4" />
+                      {addingImage ? "Uploading..." : `Upload ${selectedFiles.length || ""} image(s)`}
+                    </button>
+                  </form>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {browseImages.length === 0 ? (
+                      <p className="col-span-full text-[var(--text-muted)] text-sm py-4">
+                        No browse images. Add from URL above or from Recent Feedbacks.
+                      </p>
+                    ) : (
+                      browseImages.map((img) => (
+                        <div
+                          key={img.id}
+                          className="rounded-xl overflow-hidden border border-[var(--border)] bg-white/5"
+                        >
+                          <div className="aspect-square relative">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img src={img.imageUrl} alt={img.name || "Browse"} className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                            <div className="absolute top-2 right-2 flex gap-1">
+                              <span className="px-2 py-0.5 rounded text-xs font-bold bg-black/60">
+                                {img.source || "admin"}
+                              </span>
+                              {editingImageId === img.id ? (
+                                <>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleUpdateImageCategories(img.id)}
+                                    className="px-2 py-0.5 rounded text-xs font-bold bg-[var(--green)] text-white"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingImageId(null)}
+                                    className="px-2 py-0.5 rounded text-xs font-bold bg-white/20"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingImageId(img.id);
+                                    setEditCategoryIds(img.categoryIds ?? []);
+                                  }}
+                                  className="px-2 py-0.5 rounded text-xs font-bold bg-[var(--purple)] text-white"
+                                >
+                                  Edit
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteBrowseImage(img.id)}
+                                disabled={deletingImageId === img.id}
+                                className="px-2 py-0.5 rounded text-xs font-bold bg-red-500/80 text-white disabled:opacity-50"
+                              >
+                                {deletingImageId === img.id ? "…" : "Delete"}
+                              </button>
+                            </div>
+                          </div>
+                          <div className="p-3">
+                            {editingImageId === img.id ? (
+                              <div className="flex flex-wrap gap-2">
+                                {categories.map((c) => (
+                                  <label key={c.id} className="flex items-center gap-1.5 cursor-pointer text-sm">
+                                    <input
+                                      type="checkbox"
+                                      checked={editCategoryIds.includes(c.id)}
+                                      onChange={(e) =>
+                                        setEditCategoryIds((prev) =>
+                                          e.target.checked ? [...prev, c.id] : prev.filter((id) => id !== c.id)
+                                        )
+                                      }
+                                      className="rounded"
+                                    />
+                                    {c.name}
+                                  </label>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="text-xs text-[var(--text-muted)]">
+                                {(img.name || img.feedbackId || "—").toString().slice(0, 40)}
+                                {img.categoryIds?.length ? ` · ${img.categoryIds.length} categories` : ""}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               )}
             </div>

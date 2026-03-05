@@ -5,6 +5,7 @@ import { MobileNav } from "@/components/MobileNav";
 import { ImageShowcase } from "@/components/ImageShowcase";
 import { ImageResponseCards } from "@/components/ImageResponseCards";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { GoogleAd } from "@/components/GoogleAd";
 
 const MARQUEE_ITEMS: { Icon: typeof Flame; label: string }[] = [
   { Icon: Flame, label: "roast me" },
@@ -605,6 +606,11 @@ export default function Home() {
         </div>
       </section>
 
+      {process.env.NEXT_PUBLIC_ADSENSE_SLOT && (
+        <div className="max-w-5xl mx-auto px-4">
+          <GoogleAd slot={process.env.NEXT_PUBLIC_ADSENSE_SLOT} format="horizontal" />
+        </div>
+      )}
 
       {/* ================================================================
           SECTION 4: JOIN THE VIBE (CTA)

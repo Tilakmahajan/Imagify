@@ -39,5 +39,13 @@ service cloud.firestore {
       allow update: if request.auth != null && resource.data.recipientId == request.auth.uid;
       allow delete: if false;
     }
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /browseImages/{imageId} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }

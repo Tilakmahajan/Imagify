@@ -7,9 +7,13 @@ service firebase.storage {
     }
     match /feedback_images/{feedbackId} {
       allow read: if true;
-      allow create: if request.resource.size < 5242880
+      allow create: if request.resource.size < 10485760
         && request.resource.contentType.matches('image/.*');
       allow update, delete: if false;
+    }
+    match /browse_images/{imageId} {
+      allow read: if true;
+      allow write: if false;
     }
   }
 }

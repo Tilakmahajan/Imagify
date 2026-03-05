@@ -2,19 +2,27 @@
 
 import { useEffect, useState, useRef } from "react";
 import { ImageIcon, Loader2 } from "lucide-react";
-import {
-  collection,
-  query,
-  orderBy,
-  limit,
-  getDocs,
-} from "firebase/firestore";
-import { db, ensureFirestoreNetwork } from "@/lib/firebase";
+import { getAppFunctions } from "@/lib/functions";
 
 export interface SharedFeedback {
   id: string;
   feedbackImageUrl: string;
   createdAt: string;
+}
+
+export interface BrowseCategory {
+  id: string;
+  name: string;
+  order?: number;
+}
+
+export interface BrowseImage {
+  id: string;
+  imageUrl: string;
+  name?: string;
+  source?: "admin" | "shared";
+  categoryIds?: string[];
+  createdAt?: string;
 }
 
 function LazyImage({
@@ -34,11 +42,12 @@ function LazyImage({
   useEffect(() => {
     const el = imgRef.current;
     if (!el) return;
+    const root = scrollRoot ?? (el.closest("[data-scroll-root]") as HTMLElement | null) ?? null;
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (entry?.isIntersecting) setIsVisible(true);
       },
-      { root: scrollRoot ?? null, rootMargin: "200px", threshold: 0.01 }
+      { root, rootMargin: root ? "100px" : "200px", threshold: 0.01 }
     );
     observer.observe(el);
     return () => observer.disconnect();
@@ -68,10 +77,11 @@ export function ExploreImages({
   onSubmitShared?: (item: SharedFeedback) => Promise<void>;
   disabled?: boolean;
 }) {
-  const [shared, setShared] = useState<SharedFeedback[]>([]);
+  const [categories, setCategories] = useState<BrowseCategory[]>([]);
+  const [browseImages, setBrowseImages] = useState<BrowseImage[]>([]);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [submittingId, setSubmittingId] = useState<string | null>(null);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [hasLoadedBrowse, setHasLoadedBrowse] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
   const hasTriggeredRef = useRef(false);
@@ -99,32 +109,20 @@ export function ExploreImages({
     setLoading(true);
     const run = async () => {
       try {
-        if (!db) throw new Error("Firebase not configured");
-        await ensureFirestoreNetwork();
-        const q = query(
-          collection(db, "feedbacks"),
-          orderBy("createdAt", "desc"),
-          limit(60)
-        );
-        const snap = await getDocs(q);
-        const seenUrls = new Set<string>();
-        const items = snap.docs
-          .filter((d) => {
-            const data = d.data();
-            if (data.deleted === true || !data.feedbackImageUrl) return false;
-            const url = data.feedbackImageUrl as string;
-            if (seenUrls.has(url)) return false;
-            seenUrls.add(url);
-            return true;
-          })
-          .map((d) => ({
-            id: d.id,
-            feedbackImageUrl: d.data().feedbackImageUrl as string,
-            createdAt: d.data().createdAt || new Date().toISOString(),
-          }));
-        if (mounted) setShared(items);
-      } catch (err: any) {
-        if (mounted) setError(err.message || "Failed to load");
+        const functions = getAppFunctions();
+        if (!functions) throw new Error("Firebase not configured");
+        const { httpsCallable } = await import("firebase/functions");
+        const getBrowseData = httpsCallable<unknown, { categories: BrowseCategory[]; browseImages: BrowseImage[] }>(functions, "getBrowseData");
+        const res = await getBrowseData({});
+        if (mounted) {
+          setCategories(res.data?.categories ?? []);
+          setBrowseImages(res.data?.browseImages ?? []);
+        }
+      } catch {
+        if (mounted) {
+          setCategories([]);
+          setBrowseImages([]);
+        }
       } finally {
         if (mounted) setLoading(false);
       }
@@ -133,11 +131,15 @@ export function ExploreImages({
     return () => { mounted = false; };
   }, [hasLoadedBrowse]);
 
-  const handleSharedSelect = async (item: SharedFeedback) => {
+  const filteredImages = selectedCategoryId
+    ? browseImages.filter((img) => img.categoryIds?.includes(selectedCategoryId))
+    : browseImages;
+
+  const handleSelect = async (img: BrowseImage) => {
     if (disabled || submittingId || !onSubmitShared) return;
-    setSubmittingId(item.id);
+    setSubmittingId(img.id);
     try {
-      await onSubmitShared(item);
+      await onSubmitShared({ id: img.id, feedbackImageUrl: img.imageUrl, createdAt: "" });
     } finally {
       setSubmittingId(null);
     }
@@ -161,35 +163,76 @@ export function ExploreImages({
       ) : loading ? (
         <div className="flex justify-center py-12"><Loader2 className="animate-spin" /></div>
       ) : (
-        <div
-          ref={(el) => setBrowseScrollRoot(el)}
-          className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto p-1 rounded-xl"
-          style={{ 
-            gridAutoRows: "minmax(100px, auto)", // UNIVERSAL FIX: Forces height calculation
-            WebkitOverflowScrolling: "touch" 
-          }}
-        >
-          {shared.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => handleSharedSelect(item)}
-              className="relative w-full aspect-square overflow-hidden rounded-xl bg-[var(--bg-card)] border-2 border-transparent hover:border-[var(--purple)] transition-all active:scale-95"
-              style={{ isolation: "isolate" }}
-            >
-              <LazyImage
-                src={item.feedbackImageUrl}
-                alt="Shared"
-                scrollRoot={browseScrollRoot}
-              />
-              {submittingId === item.id && (
-                <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
-                  <Loader2 className="w-6 h-6 text-white animate-spin" />
-                </div>
-              )}
-            </button>
-          ))}
-        </div>
+        <>
+          {categories.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-4">
+              <button
+                type="button"
+                onClick={() => setSelectedCategoryId(null)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                  selectedCategoryId === null
+                    ? "bg-[var(--purple)] text-white"
+                    : "bg-white/5 text-[var(--text-muted)] hover:bg-white/10"
+                }`}
+              >
+                All
+              </button>
+              {categories.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSelectedCategoryId((prev) => (prev === c.id ? null : c.id))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    selectedCategoryId === c.id
+                      ? "bg-[var(--purple)] text-white"
+                      : "bg-white/5 text-[var(--text-muted)] hover:bg-white/10"
+                  }`}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+          <div
+            ref={(el) => setBrowseScrollRoot(el)}
+            data-scroll-root
+            className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto p-1 rounded-xl"
+            style={{
+              gridAutoRows: "minmax(100px, auto)",
+              WebkitOverflowScrolling: "touch",
+            }}
+          >
+            {filteredImages.length === 0 ? (
+              <p className="col-span-full py-8 text-center text-[var(--text-muted)] text-sm">
+                {browseImages.length === 0
+                  ? "No images yet. Admin can add images from the admin panel."
+                  : "No images in this category."}
+              </p>
+            ) : (
+              filteredImages.map((img) => (
+                <button
+                  key={img.id}
+                  type="button"
+                  onClick={() => handleSelect(img)}
+                  disabled={disabled || !!submittingId}
+                  className="relative w-full aspect-square overflow-hidden rounded-xl bg-[var(--bg-card)] border-2 border-transparent hover:border-[var(--purple)] transition-all active:scale-95 disabled:opacity-50"
+                  style={{ isolation: "isolate" }}
+                >
+                  <LazyImage
+                    src={img.imageUrl}
+                    alt={img.name || "Browse"}
+                    scrollRoot={browseScrollRoot}
+                  />
+                  {submittingId === img.id && (
+                    <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
+                      <Loader2 className="w-6 h-6 text-white animate-spin" />
+                    </div>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </>
       )}
     </section>
   );
