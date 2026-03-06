@@ -2,26 +2,29 @@
 
 import { useState, useRef, useEffect } from "react";
 import { toPng } from "html-to-image";
-import { X } from "lucide-react";
+import { domToPng } from "modern-screenshot";
+import { X, Share2, Loader2 } from "lucide-react";
+
+const isIOS = () => typeof navigator !== "undefined" && /iphone|ipad|ipod/.test(navigator.userAgent.toLowerCase());
 import { BrandedFeedbackShareTemplate } from "./BrandedFeedbackShareTemplate";
 
-const DEFAULT_DESCRIPTION = "Anonymous image response — someone shared this reaction with you via picpop";
+/** * Force-fetches the image with CORS to prevent "Tainted Canvas".
+ * Added a cache-buster to bypass any old 403/Forbidden cached results.
+ */
+async function imageUrlToDataUrl(url: string): Promise<string> {
+  const cacheBuster = `cb=${Date.now()}`;
+  const finalUrl = url.includes('?') ? `${url}&${cacheBuster}` : `${url}?${cacheBuster}`;
 
-interface FeedbackShareModalProps {
-  isOpen: boolean;
-  onClose: () => void;
-  singleFeedback: { feedbackImageUrl: string };
-  allData: {
-    imageUrl: string;
-    coolId: string;
-    feedbackImageUrls: string[];
-  };
-  /** Link to the feedback page (e.g. /f?imageId=xxx) */
-  shareUrl: string;
-  /** User's personal feedback link (e.g. domain/u/username) for viral discovery */
-  userFeedbackLink?: string;
-  /** Description shown with the image (e.g. "Anonymous response shared via picpop") */
-  description?: string;
+  const res = await fetch(finalUrl, { mode: "cors" });
+  if (!res.ok) throw new Error("Cloud Storage Blocked Access (CORS/Rules)");
+
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function FeedbackShareModal({
@@ -31,39 +34,121 @@ export function FeedbackShareModal({
   allData,
   shareUrl,
   userFeedbackLink,
-  description = DEFAULT_DESCRIPTION,
-}: FeedbackShareModalProps) {
+  description = "Anonymous reaction via picpop",
+}: any) {
   const [sharing, setSharing] = useState(false);
+  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
+  const [isReady, setIsReady] = useState(false);
   const templateRef = useRef<HTMLDivElement>(null);
 
+  // Preload logic
   useEffect(() => {
-    if (!isOpen) setSharing(false);
-  }, [isOpen]);
+    if (!isOpen) {
+      setResolvedImageUrl(null);
+      setIsReady(false);
+      return;
+    }
+
+    imageUrlToDataUrl(singleFeedback.feedbackImageUrl)
+      .then((dataUrl) => {
+        setResolvedImageUrl(dataUrl);
+        // Essential: give the browser time to register the DataURL and decode (iOS needs more time)
+        setTimeout(() => setIsReady(true), isIOS() ? 1200 : 800);
+      })
+      .catch((err) => {
+        console.error("Preload Error:", err);
+        setResolvedImageUrl(singleFeedback.feedbackImageUrl);
+        setIsReady(true);
+      });
+  }, [isOpen, singleFeedback.feedbackImageUrl]);
 
   const handleShare = async () => {
+    if (!templateRef.current || sharing || !isReady) return;
     setSharing(true);
+
     try {
-      await new Promise((r) => setTimeout(r, 300));
-      const node = templateRef.current?.querySelector("[data-share-template]") || templateRef.current;
-      if (node) {
-        const dataUrl = await toPng(node as HTMLElement, { cacheBust: true, pixelRatio: 2 });
-        const res = await fetch(dataUrl);
-        const blob = await res.blob();
-        const file = new File([blob], "picpop-feedback.png", { type: "image/png" });
-        const shareText = "Check this out on picpop — anonymous image feedback!";
-        if (navigator.share && navigator.canShare?.({ files: [file] })) {
-          await navigator.share({ files: [file], text: shareText, url: shareUrl, title: "picpop — anonymous feedback" });
-        } else {
-          const url = URL.createObjectURL(blob);
-          const link = document.createElement("a");
-          link.href = url;
-          link.download = "picpop-feedback.png";
-          link.click();
-          URL.revokeObjectURL(url);
+      // Find the specific template wrapper
+      const node = templateRef.current.querySelector("[data-share-template]") as HTMLElement || templateRef.current;
+
+      // STEP 1: Optimization - Force images to load inside the template
+      const images = node.getElementsByTagName('img');
+      await Promise.all(Array.from(images).map(img => {
+        if (img.complete) return Promise.resolve();
+        return new Promise(resolve => { img.onload = resolve; img.onerror = resolve; });
+      }));
+
+      // STEP 2: Capture - use modern-screenshot on iOS (better Safari support), html-to-image elsewhere
+      const captureOpts = {
+        scale: 2,
+        fetch: { bypassingCache: true },
+      };
+      const htmlToImageOpts = {
+        backgroundColor: "#12121c",
+        pixelRatio: 2,
+        skipFonts: true,
+        cacheBust: true,
+        style: { visibility: "visible", opacity: "1" },
+      };
+
+      let dataUrl: string;
+      if (isIOS()) {
+        // iOS: move template into viewport so Safari paints it (off-screen can yield blank)
+        const wrapper = templateRef.current;
+        if (wrapper) {
+          wrapper.style.position = "fixed";
+          wrapper.style.left = "0";
+          wrapper.style.top = "0";
+          wrapper.style.width = "375px";
+          wrapper.style.visibility = "visible";
+          wrapper.style.opacity = "0.01";
+          wrapper.style.zIndex = "-1";
+          await new Promise((r) => setTimeout(r, 500));
         }
+        try {
+          let lastUrl = "";
+          for (let i = 0; i < 3; i++) {
+            lastUrl = await domToPng(node, captureOpts);
+            await new Promise((r) => setTimeout(r, 400));
+          }
+          dataUrl = lastUrl;
+        } finally {
+          if (wrapper) {
+            wrapper.style.position = "absolute";
+            wrapper.style.left = "-2000px";
+            wrapper.style.top = "-2000px";
+            wrapper.style.width = "400px";
+            wrapper.style.opacity = "";
+          }
+        }
+      } else {
+        dataUrl = await toPng(node, htmlToImageOpts);
+      }
+
+      const res = await fetch(dataUrl);
+      const blob = await res.blob();
+      
+      if (blob.size < 10000) throw new Error("Image capture failed (Empty Blob)");
+
+      const file = new File([blob], `picpop-share-${Date.now()}.png`, { type: "image/png" });
+
+      const fullShareUrl = shareUrl.startsWith("http") ? shareUrl : `${typeof window !== "undefined" ? window.location.origin : ""}${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`;
+      const shareText = `${description}\n\n${fullShareUrl}`;
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        await navigator.share({
+          files: [file],
+          title: "picpop",
+          text: shareText,
+        });
+      } else {
+        // Fallback for desktop/unsupported browsers
+        const link = document.createElement("a");
+        link.href = dataUrl;
+        link.download = "picpop-feedback.png";
+        link.click();
       }
     } catch (err) {
-      if ((err as Error).name !== "AbortError") console.error(err);
+      console.error("Capture Process Error:", err);
+      alert("Failed to generate image. Please try again.");
     } finally {
       setSharing(false);
     }
@@ -72,112 +157,60 @@ export function FeedbackShareModal({
   if (!isOpen) return null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.6)", backdropFilter: "blur(8px)" }}
-      onClick={onClose}
-    >
-      <div
-        className="rounded-2xl w-full max-w-md overflow-hidden flex flex-col"
-        style={{
-          background: "linear-gradient(180deg, var(--bg-card) 0%, rgba(18,18,28,0.98) 100%)",
-          boxShadow: "0 24px 48px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.08)",
-          border: "1px solid rgba(255,255,255,0.12)",
-        }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
-          <h3 className="text-lg font-black text-white">Share feedback</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-2 rounded-lg hover:bg-white/10 text-white/60 hover:text-white transition-colors -mr-2"
-          >
-            <X className="w-5 h-5" />
-          </button>
+    <div className="fixed inset-0 z-[999] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md" onClick={onClose}>
+      <div className="bg-[#12121c] rounded-3xl w-full max-w-sm overflow-hidden border border-white/10" onClick={e => e.stopPropagation()}>
+        
+        {/* HEADER */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-white/5">
+          <span className="text-white font-bold">Share Feedback</span>
+          <button onClick={onClose} className="text-white/40"><X size={20} /></button>
         </div>
 
-        {/* Hidden full-res template for capture */}
-        <div
+        {/* HIDDEN CAPTURE AREA 
+            iOS FIX: It MUST be visibility: visible but moved far off-screen.
+            If visibility is hidden, many browsers skip the "Paint" step, 
+            resulting in a black or blank image.
+        */}
+        <div 
           ref={templateRef}
-          style={{
-            position: "fixed",
-            left: -9999,
-            top: 0,
-            zIndex: -1,
-            opacity: 0,
-            pointerEvents: "none",
+          style={{ 
+            position: 'absolute', 
+            top: '-2000px', 
+            left: '-2000px', 
+            width: '400px', // Set a fixed width for the template
+            visibility: 'visible',
           }}
         >
-          <BrandedFeedbackShareTemplate
-            feedbackImageUrl={singleFeedback.feedbackImageUrl}
-            coolId={allData.coolId}
-            shareUrl={shareUrl}
-            userFeedbackLink={userFeedbackLink}
-            description={description}
-          />
+          {resolvedImageUrl && (
+            <BrandedFeedbackShareTemplate
+              feedbackImageUrl={resolvedImageUrl}
+              coolId={allData.coolId}
+              shareUrl={shareUrl}
+              userFeedbackLink={userFeedbackLink}
+              description={description}
+              useDataUrl={true}
+            />
+          )}
         </div>
 
-        {/* Preview card */}
-        <div className="p-5 flex flex-col gap-4">
-          <div
-            className="rounded-xl overflow-hidden border border-white/10 bg-black/40 flex flex-col"
-            style={{ aspectRatio: "9/16", maxHeight: 320 }}
+        {/* PREVIEW UI */}
+        <div className="p-6 flex flex-col gap-6 text-center">
+          <div className="relative aspect-[9/14] w-full bg-white/5 rounded-2xl overflow-hidden border border-white/5 flex items-center justify-center">
+            {isReady && resolvedImageUrl ? (
+              <img src={resolvedImageUrl} className="w-full h-full object-contain" alt="Preview" />
+            ) : (
+              <Loader2 className="w-8 h-8 text-white/20 animate-spin" />
+            )}
+          </div>
+
+          <button
+            onClick={handleShare}
+            disabled={!isReady || sharing}
+            className="w-full py-4 rounded-2xl font-bold text-white flex items-center justify-center gap-2 transition-all active:scale-95 disabled:opacity-30"
+            style={{ background: "linear-gradient(135deg, #FF3D7F, #A033FF)" }}
           >
-            <div className="flex-1 flex items-center justify-center p-3 min-h-0 overflow-hidden">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={singleFeedback.feedbackImageUrl}
-                alt="Anonymous feedback"
-                className="w-full h-full object-contain rounded-lg"
-              />
-            </div>
-            <div className="px-4 py-3 border-t border-white/10 bg-black/30">
-              <p className="text-sm font-semibold text-white/90 leading-snug">{description}</p>
-              <div className="mt-2 flex items-center gap-2">
-                <span className="text-xs font-bold text-[var(--pink)]">picpop</span>
-                <span className="text-white/40">·</span>
-                <span className="text-xs font-medium text-white/50 truncate">{shareUrl}</span>
-              </div>
-            </div>
-          </div>
-
-          <p className="text-xs font-medium text-white/50 text-center">
-            Shared image includes branding + link so friends can discover the app
-          </p>
-
-          <div className="flex flex-col gap-2">
-            <button
-              type="button"
-              disabled={sharing}
-              onClick={handleShare}
-              className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-95 hover:scale-[1.01] active:scale-[0.99] disabled:opacity-60 disabled:hover:scale-100"
-              style={{
-                background: "linear-gradient(135deg, var(--pink), var(--purple))",
-                boxShadow: "0 4px 20px rgba(255,61,127,0.35)",
-                touchAction: "manipulation",
-              }}
-            >
-              {sharing ? (
-                <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <>
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                  </svg>
-                  Share
-                </>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="w-full py-2.5 text-sm font-bold text-white/50 hover:text-white/80 transition-colors"
-            >
-              Cancel
-            </button>
-          </div>
+            {sharing ? <Loader2 className="animate-spin w-5 h-5" /> : <><Share2 size={18} /> Share</>}
+          </button>
         </div>
       </div>
     </div>

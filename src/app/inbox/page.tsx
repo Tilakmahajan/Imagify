@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Fragment } from "react";
 import Link from "next/link";
 import { Bell, Eye, Image as ImageIcon, X, MoreVertical, Trash2, Flag } from "lucide-react";
 import {
@@ -26,6 +26,7 @@ import { useToast } from "@/lib/toast-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { FeedbackShareModal } from "@/components/FeedbackShareModal";
 import { ReportFeedbackModal } from "@/components/ReportFeedbackModal";
+import { GoogleAd } from "@/components/GoogleAd";
 
 function formatTimeAgo(iso: string) {
   const d = new Date(iso);
@@ -438,47 +439,55 @@ export default function InboxPage() {
               <Link href="/dashboard" className="mt-4 inline-block text-[var(--pink)] font-bold hover:underline">Go to dashboard</Link>
             </div>
           ) : (
-            filteredItems.map((item) =>
-              item.itemType === "visit" ? (
-                <div
-                  key={item.id}
-                  className="w-full p-4 rounded-xl border border-[var(--border)]"
-                  style={{ background: "var(--bg-card)" }}
-                >
-                  <div className="flex gap-4">
-                    <div
-                      className="w-16 h-16 rounded-lg flex items-center justify-center shrink-0"
-                      style={{ background: "linear-gradient(135deg, rgba(0,200,255,0.2), rgba(0,200,255,0.05))" }}
-                    >
-                      <Eye className="w-8 h-8 text-[var(--blue)]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-sm">Someone viewed your link</p>
-                      <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => setSelectedFeedback(item)}
-                  className="w-full text-left p-4 rounded-xl border border-[var(--border)] hover:border-[var(--pink)]/30 transition-colors"
-                  style={{ background: "var(--bg-card)" }}
-                >
-                  <div className="flex gap-4">
-                    <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-black/20">
-                      {/* eslint-disable-next-line @next/next/no-img-element */}
-                      <img src={item.feedbackImageUrl} alt="" className="w-full h-full object-cover" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-sm">New feedback</p>
-                      <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
+            <>
+              {process.env.NEXT_PUBLIC_ADSENSE_SLOT && (
+                <GoogleAd slot={process.env.NEXT_PUBLIC_ADSENSE_SLOT} format="horizontal" className="mb-4" />
+              )}
+              {filteredItems.map((item, index) => (
+              <Fragment key={item.id}>
+                {index > 0 && index % 3 === 0 && process.env.NEXT_PUBLIC_ADSENSE_SLOT && (
+                  <GoogleAd slot={process.env.NEXT_PUBLIC_ADSENSE_SLOT} format="horizontal" className="my-4" />
+                )}
+                {item.itemType === "visit" ? (
+                  <div
+                    className="w-full p-4 rounded-xl border border-[var(--border)]"
+                    style={{ background: "var(--bg-card)" }}
+                  >
+                    <div className="flex gap-4">
+                      <div
+                        className="w-16 h-16 rounded-lg flex items-center justify-center shrink-0"
+                        style={{ background: "linear-gradient(135deg, rgba(0,200,255,0.2), rgba(0,200,255,0.05))" }}
+                      >
+                        <Eye className="w-8 h-8 text-[var(--blue)]" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm">Someone viewed your link</p>
+                        <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
+                      </div>
                     </div>
                   </div>
-                </button>
-              )
-            )
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedFeedback(item)}
+                    className="w-full text-left p-4 rounded-xl border border-[var(--border)] hover:border-[var(--pink)]/30 transition-colors"
+                    style={{ background: "var(--bg-card)" }}
+                  >
+                    <div className="flex gap-4">
+                      <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-black/20">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={item.feedbackImageUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-sm">New feedback</p>
+                        <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
+                      </div>
+                    </div>
+                  </button>
+                )}
+              </Fragment>
+            ))}
+            </>
           )}
         </div>
       </main>

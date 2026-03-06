@@ -1,14 +1,13 @@
 "use client";
 
-import { ShareQRCode } from "./ShareQRCode";
-
-/** Story-sized branded card for sharing. Includes QR code, watermark, description, attractive template. */
+/** Story-sized branded card for sharing. Image + attractive description + link (no QR). */
 export function BrandedFeedbackShareTemplate({
   feedbackImageUrl,
   coolId,
   shareUrl,
   userFeedbackLink,
   description,
+  useDataUrl = false,
 }: {
   feedbackImageUrl: string;
   coolId?: string;
@@ -16,8 +15,10 @@ export function BrandedFeedbackShareTemplate({
   userFeedbackLink?: string;
   /** Description shown below image: e.g. "Anonymous response shared via picpop" */
   description?: string;
+  /** When true, image is a data URL - omit crossOrigin to avoid iOS Safari canvas issues */
+  useDataUrl?: boolean;
 }) {
-  const qrUrl = userFeedbackLink || shareUrl;
+  const displayUrl = userFeedbackLink || shareUrl;
   return (
     <div
       data-share-template
@@ -100,7 +101,7 @@ export function BrandedFeedbackShareTemplate({
         <img
           src={feedbackImageUrl}
           alt="Anonymous feedback"
-          crossOrigin="anonymous"
+          {...(useDataUrl ? {} : { crossOrigin: "anonymous" })}
           style={{ width: "100%", height: "100%", objectFit: "contain" }}
         />
         {description && (
@@ -120,43 +121,48 @@ export function BrandedFeedbackShareTemplate({
         )}
       </div>
 
-      {/* Footer: QR + branding */}
+      {/* Footer: link + branding (no QR) */}
       <div
         style={{
           marginTop: "auto",
-          paddingTop: 16,
+          paddingTop: 20,
+          paddingBottom: 8,
           borderTop: "1px solid rgba(255,255,255,0.08)",
-          display: "flex",
-          alignItems: "center",
-          gap: 16,
-          flexWrap: "wrap",
+          textAlign: "center",
         }}
       >
-        <div style={{ flexShrink: 0 }}>
-          <ShareQRCode url={qrUrl} size={88} />
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <p
-            style={{
-              margin: 0,
-              fontSize: 15,
-              fontWeight: 900,
-              letterSpacing: "0.1em",
-              background: "linear-gradient(135deg, #FF3D7F, #7C3AFF)",
-              WebkitBackgroundClip: "text",
-              WebkitTextFillColor: "transparent",
-              backgroundClip: "text",
-            }}
-          >
-            picpop
-          </p>
-          <p style={{ margin: "4px 0 0 0", fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.6)" }}>
-            Scan QR • Get your link
-          </p>
-          <p style={{ margin: "6px 0 0 0", fontSize: 9, color: "rgba(255,255,255,0.5)", wordBreak: "break-all" }}>
-            {shareUrl}
-          </p>
-        </div>
+        <p
+          style={{
+            margin: 0,
+            fontSize: 15,
+            fontWeight: 900,
+            letterSpacing: "0.1em",
+            background: "linear-gradient(135deg, #FF3D7F, #7C3AFF)",
+            WebkitBackgroundClip: "text",
+            WebkitTextFillColor: "transparent",
+            backgroundClip: "text",
+          }}
+        >
+          picpop
+        </p>
+        <p style={{ margin: "8px 0 0 0", fontSize: 13, fontWeight: 600, color: "rgba(255,255,255,0.9)", lineHeight: 1.4 }}>
+          {description || "Anonymous reaction shared via picpop"}
+        </p>
+        <p
+          style={{
+            margin: "12px 0 0 0",
+            fontSize: 12,
+            fontWeight: 700,
+            color: "rgba(255,255,255,0.7)",
+            wordBreak: "break-all",
+            padding: "10px 14px",
+            background: "rgba(255,255,255,0.06)",
+            borderRadius: 12,
+            border: "1px solid rgba(255,255,255,0.1)",
+          }}
+        >
+          {displayUrl}
+        </p>
       </div>
     </div>
   );

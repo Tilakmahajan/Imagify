@@ -499,15 +499,17 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
 /**
  * Admin: Get users, reports, blocked IPs. Requires ADMIN_UIDS env var. (Gen 2)
  */
-exports.getAdminData = onCall({ cors: CORS_ORIGINS }, async (request) => {
+exports.getAdminData = onCall({ cors: true }, async (request) => {
   await requireAdmin(request);
   const db = getFirestore();
 
-  const [usersSnap, reportsSnap, blockedSnap, feedbacksSnap] = await Promise.all([
+  const [usersSnap, reportsSnap, blockedSnap, feedbacksSnap, categoriesSnap, browseImagesSnap] = await Promise.all([
     db.collection("users").limit(500).get(),
     db.collection("reports").limit(200).get(),
     db.collection("blockedIps").limit(200).get(),
     db.collection("feedbacks").limit(100).get(),
+    db.collection("categories").orderBy("order").get(),
+    db.collection("browseImages").get(),
   ]);
 
   const toDoc = (d) => ({ id: d.id, ...d.data() });
@@ -517,14 +519,16 @@ exports.getAdminData = onCall({ cors: CORS_ORIGINS }, async (request) => {
   const reports = reportsSnap.docs.map(toDoc).sort(sortByCreated);
   const blockedIps = blockedSnap.docs.map(toDoc).sort(sortByCreated);
   const feedbacks = feedbacksSnap.docs.map(toDoc).sort(sortByCreated);
+  const categories = categoriesSnap.docs.map(toDoc);
+  const browseImages = browseImagesSnap.docs.map(toDoc).sort(sortByCreated);
 
-  return { users, reports, blockedIps, feedbacks };
+  return { users, reports, blockedIps, feedbacks, categories, browseImages };
 });
 
 /**
  * Admin: Unblock an IP. (Gen 2)
  */
-exports.adminUnblockIp = onCall({ cors: CORS_ORIGINS }, async (request) => {
+exports.adminUnblockIp = onCall({ cors: true }, async (request) => {
   await requireAdmin(request);
   const { ipKey } = request.data || {};
   if (!ipKey) {
@@ -544,7 +548,7 @@ exports.adminUnblockIp = onCall({ cors: CORS_ORIGINS }, async (request) => {
 /**
  * Admin: Add a UID to the admin list (Firestore config/admin). (Gen 2)
  */
-exports.adminAddAdmin = onCall({ cors: CORS_ORIGINS }, async (request) => {
+exports.adminAddAdmin = onCall({ cors: true }, async (request) => {
   await requireAdmin(request);
   const { uid } = request.data || {};
   if (!uid || typeof uid !== "string") {
@@ -576,7 +580,7 @@ exports.adminAddAdmin = onCall({ cors: CORS_ORIGINS }, async (request) => {
  * Bootstrap: Add yourself as admin using ADMIN_SECRET. No existing admin required. (Gen 2)
  * Sign in first, then enter the admin key to add your UID to Firestore config/admin.
  */
-exports.adminBootstrap = onCall({ cors: CORS_ORIGINS }, async (request) => {
+exports.adminBootstrap = onCall({ cors: true }, async (request) => {
   if (!request.auth?.uid) {
     throw new HttpsError("unauthenticated", "Sign in first, then use the admin key to add yourself.");
   }
@@ -604,4 +608,148 @@ exports.adminBootstrap = onCall({ cors: CORS_ORIGINS }, async (request) => {
   uids.push(uid);
   await configRef.set({ uids }, { merge: true });
   return { success: true, message: "Admin added. Reload the page." };
+});
+
+/**
+ * Public: Get categories and browse images for the feedback page. (Gen 2)
+ */
+exports.getBrowseData = onCall({ cors: true }, async () => {
+  const db = getFirestore();
+  const [categoriesSnap, browseImagesSnap] = await Promise.all([
+    db.collection("categories").orderBy("order").get(),
+    db.collection("browseImages").get(),
+  ]);
+  const categories = categoriesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  const browseImages = browseImagesSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
+  return { categories, browseImages };
+});
+
+/**
+ * Admin: Add a category. (Gen 2)
+ */
+exports.adminAddCategory = onCall({ cors: true }, async (request) => {
+  await requireAdmin(request);
+  const { name } = request.data || {};
+  if (!name || typeof name !== "string" || !name.trim()) {
+    throw new HttpsError("invalid-argument", "name is required");
+  }
+  const db = getFirestore();
+  const categoriesSnap = await db.collection("categories").orderBy("order", "desc").limit(1).get();
+  const nextOrder = categoriesSnap.empty ? 0 : (categoriesSnap.docs[0].data().order || 0) + 1;
+  await db.collection("categories").add({
+    name: name.trim(),
+    order: nextOrder,
+    createdAt: new Date().toISOString(),
+  });
+  return { success: true };
+});
+
+/**
+ * Admin: Delete a category. (Gen 2)
+ */
+exports.adminDeleteCategory = onCall({ cors: true }, async (request) => {
+  await requireAdmin(request);
+  const { categoryId } = request.data || {};
+  if (!categoryId) throw new HttpsError("invalid-argument", "categoryId is required");
+  const db = getFirestore();
+  await db.collection("categories").doc(categoryId).delete();
+  const imagesSnap = await db.collection("browseImages").get();
+  const batch = db.batch();
+  imagesSnap.docs.forEach((doc) => {
+    const data = doc.data();
+    const categoryIds = Array.isArray(data.categoryIds) ? data.categoryIds.filter((id) => id !== categoryId) : [];
+    batch.update(doc.ref, { categoryIds });
+  });
+  await batch.commit();
+  return { success: true };
+});
+
+/**
+ * Admin: Upload a browse image (file upload). (Gen 2)
+ */
+exports.adminUploadBrowseImage = onCall({ cors: true }, async (request) => {
+  await requireAdmin(request);
+  const { data: base64Data, mimeType, name, categoryIds } = request.data || {};
+  if (!base64Data || typeof base64Data !== "string") {
+    throw new HttpsError("invalid-argument", "Image data is required");
+  }
+  const mime = (typeof mimeType === "string" && mimeType.match(/^image\//)) ? mimeType : "image/jpeg";
+  const ext = mime === "image/png" ? "png" : mime === "image/gif" ? "gif" : mime === "image/webp" ? "webp" : "jpg";
+  const base64 = base64Data.replace(/^data:image\/\w+;base64,/, "");
+  const buffer = Buffer.from(base64, "base64");
+  if (buffer.length > 10 * 1024 * 1024) {
+    throw new HttpsError("invalid-argument", "Image must be under 10MB");
+  }
+  const db = getFirestore();
+  const docRef = db.collection("browseImages").doc();
+  const id = docRef.id;
+  const path = `browse_images/${id}.${ext}`;
+  const bucket = getStorage().bucket();
+  const file = bucket.file(path);
+  await file.save(buffer, { contentType: mime, metadata: { cacheControl: "public, max-age=31536000" } });
+  await file.makePublic();
+  const imageUrl = `https://storage.googleapis.com/${bucket.name}/${path}`;
+  const ids = Array.isArray(categoryIds) ? categoryIds : [];
+  await docRef.set({
+    imageUrl,
+    name: typeof name === "string" ? name.trim() : "",
+    source: "admin",
+    categoryIds: ids,
+    createdAt: new Date().toISOString(),
+  });
+  return { success: true, imageId: id };
+});
+
+/**
+ * Admin: Add image from feedback to browse. (Gen 2)
+ */
+exports.adminAddImageFromFeedback = onCall({ cors: true }, async (request) => {
+  await requireAdmin(request);
+  const { feedbackId, categoryIds } = request.data || {};
+  if (!feedbackId) throw new HttpsError("invalid-argument", "feedbackId is required");
+  const db = getFirestore();
+  const feedbackSnap = await db.collection("feedbacks").doc(feedbackId).get();
+  if (!feedbackSnap.exists) throw new HttpsError("not-found", "Feedback not found");
+  const data = feedbackSnap.data();
+  const url = data?.feedbackImageUrl;
+  if (!url) throw new HttpsError("invalid-argument", "Feedback has no image");
+  const ids = Array.isArray(categoryIds) ? categoryIds : [];
+  const existing = await db.collection("browseImages").where("feedbackId", "==", feedbackId).limit(1).get();
+  if (!existing.empty) throw new HttpsError("already-exists", "This feedback is already in browse");
+  await db.collection("browseImages").add({
+    imageUrl: url,
+    feedbackId,
+    source: "shared",
+    categoryIds: ids,
+    createdAt: new Date().toISOString(),
+  });
+  return { success: true };
+});
+
+/**
+ * Admin: Update image categories (many-to-many). (Gen 2)
+ */
+exports.adminUpdateImageCategories = onCall({ cors: true }, async (request) => {
+  await requireAdmin(request);
+  const { imageId, categoryIds } = request.data || {};
+  if (!imageId) throw new HttpsError("invalid-argument", "imageId is required");
+  const ids = Array.isArray(categoryIds) ? categoryIds : [];
+  const db = getFirestore();
+  const ref = db.collection("browseImages").doc(imageId);
+  const snap = await ref.get();
+  if (!snap.exists) throw new HttpsError("not-found", "Image not found");
+  await ref.update({ categoryIds: ids });
+  return { success: true };
+});
+
+/**
+ * Admin: Delete a browse image. (Gen 2)
+ */
+exports.adminDeleteBrowseImage = onCall({ cors: true }, async (request) => {
+  await requireAdmin(request);
+  const { imageId } = request.data || {};
+  if (!imageId) throw new HttpsError("invalid-argument", "imageId is required");
+  const db = getFirestore();
+  await db.collection("browseImages").doc(imageId).delete();
+  return { success: true };
 });

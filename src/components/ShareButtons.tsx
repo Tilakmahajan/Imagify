@@ -5,6 +5,19 @@ import { toPng } from "html-to-image";
 import { Check } from "lucide-react";
 import { ShareCardTemplate } from "./ShareCardTemplate";
 
+/** Preload image as data URL to avoid iOS Safari canvas tainting (blank output) */
+async function imageUrlToDataUrl(url: string): Promise<string> {
+  const res = await fetch(url, { mode: "cors" });
+  if (!res.ok) throw new Error("Failed to fetch image");
+  const blob = await res.blob();
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
 interface ShareButtonsProps {
   /** The shareable URL (e.g. /f/[imageId]) */
   shareUrl: string;
@@ -50,6 +63,10 @@ export function ShareButtons({
 }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false);
   const [instagramSharing, setInstagramSharing] = useState(false);
+  const [resolvedSnapshotData, setResolvedSnapshotData] = useState<{
+    imageUrl: string;
+    feedbackImageUrls: string[];
+  } | null>(null);
   const templateRef = useRef<HTMLDivElement>(null);
 
   const fullUrl =
@@ -72,10 +89,31 @@ export function ShareButtons({
   };
 
   useEffect(() => {
-    if (!instagramSharing || !snapshotData) return;
-    const t = setTimeout(() => captureAndOpenInstagram(), 1200);
-    return () => clearTimeout(t);
+    if (!instagramSharing || !snapshotData) {
+      setResolvedSnapshotData(null);
+      return;
+    }
+    let cancelled = false;
+    Promise.all([
+      imageUrlToDataUrl(snapshotData.imageUrl).catch(() => snapshotData.imageUrl),
+      ...snapshotData.feedbackImageUrls.map((url) =>
+        imageUrlToDataUrl(url).catch(() => url)
+      ),
+    ]).then(([imageUrl, ...feedbackImageUrls]) => {
+      if (!cancelled) {
+        setResolvedSnapshotData({ imageUrl, feedbackImageUrls });
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [instagramSharing, snapshotData]);
+
+  useEffect(() => {
+    if (!instagramSharing || !resolvedSnapshotData || !templateRef.current) return;
+    const t = setTimeout(() => captureAndOpenInstagram(), 800);
+    return () => clearTimeout(t);
+  }, [instagramSharing, resolvedSnapshotData]);
 
   const saveImageToDevice = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
@@ -96,7 +134,22 @@ export function ShareButtons({
     const isIOS = /iphone|ipad|ipod/.test(ua);
     try {
       const el = templateRef.current.querySelector("[data-share-template]") || templateRef.current;
-      const dataUrl = await toPng(el as HTMLElement, { cacheBust: true, pixelRatio: 2 });
+      const captureOpts = { cacheBust: true, pixelRatio: 2 };
+      let dataUrl: string;
+      if (isMobile) {
+        let prevLen = 0;
+        let attempts = 0;
+        const maxAttempts = 6;
+        do {
+          dataUrl = await toPng(el as HTMLElement, captureOpts);
+          if (dataUrl.length === prevLen || attempts >= maxAttempts - 1) break;
+          prevLen = dataUrl.length;
+          attempts++;
+          await new Promise((r) => setTimeout(r, 400));
+        } while (attempts < maxAttempts);
+      } else {
+        dataUrl = await toPng(el as HTMLElement, captureOpts);
+      }
       const res = await fetch(dataUrl);
       const blob = await res.blob();
       const file = new File([blob], "picpop-story.png", { type: "image/png" });
@@ -222,16 +275,17 @@ export function ShareButtons({
             left: -9999,
             top: 0,
             zIndex: -1,
-            opacity: 0,
+            opacity: 1,
             pointerEvents: "none",
           }}
         >
           <ShareCardTemplate
-            imageUrl={snapshotData.imageUrl}
+            imageUrl={(resolvedSnapshotData ?? snapshotData).imageUrl}
             coolId={snapshotData.coolId}
-            feedbackImageUrls={snapshotData.feedbackImageUrls}
+            feedbackImageUrls={(resolvedSnapshotData ?? snapshotData).feedbackImageUrls}
             shareUrl={fullUrl}
             userFeedbackLink={userFeedbackLink}
+            useDataUrls={!!resolvedSnapshotData}
           />
         </div>
       )}

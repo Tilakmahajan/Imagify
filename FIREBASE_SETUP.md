@@ -66,6 +66,19 @@ gcloud storage buckets update gs://imagify-5f3d5.firebasestorage.app --cors-file
 
 If your bucket name differs, use the value from `NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET` in `.env.local`.
 
+### 5.2 403 Permission denied (Storage / Firestore)
+
+If you see `{"error":{"code":403,"message":"Permission denied."}}` when loading images or data:
+
+| Cause | Fix |
+|-------|-----|
+| **Storage rules not deployed** | Run `firebase deploy --only storage` and ensure `storage.rules` has `allow read: if true` for `feedback_images/` and `images/` |
+| **Domain not authorized** | Firebase Console → Authentication → Settings → Authorized domains → add your domain (e.g. `picpop.me`, `localhost`) |
+| **Firestore rules not deployed** | Run `firebase deploy --only firestore` |
+| **Expired download token** | Firebase Storage URLs from `getDownloadURL` include a token. If very old, re-fetch the URL from Firestore. |
+
+**Quick check:** Open a feedback image URL directly in a new browser tab. If you get 403, redeploy storage rules and verify your domain is authorized.
+
 ## 6. Firebase Hosting (Frontend)
 
 Deploy the Next.js static export to Firebase Hosting:
