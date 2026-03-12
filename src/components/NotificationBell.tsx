@@ -17,7 +17,6 @@ import { db, ensureFirestoreNetwork } from "@/lib/firebase";
 import {
   requestNotificationPermission,
   saveFcmToken,
-  onForegroundMessage,
 } from "@/lib/notifications";
 import { useToast } from "@/lib/toast-context";
 
@@ -138,15 +137,6 @@ export function NotificationBell({ userId }: NotificationBellProps) {
     return () => unsub?.();
   }, [userId, toast]);
 
-  useEffect(() => {
-    let unsub: (() => void) | undefined;
-    onForegroundMessage((payload) => {
-      const body = payload.notification?.body ?? payload.data?.body ?? payload.data?.message;
-      const title = payload.notification?.title ?? payload.data?.title;
-      if (body || title) toast.info(body || title || "New activity");
-    }).then((fn) => { unsub = fn; });
-    return () => unsub?.();
-  }, [toast]);
 
   const handleEnableNotifications = async () => {
     if (notifStatus === "enabled" || notifStatus === "unsupported") return;

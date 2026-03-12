@@ -30,12 +30,17 @@ export interface UserProfile {
   photoURL: string | null;
   coolId: string | null;
   createdAt: string;
+  termsAccepted?: boolean;
+  termsAcceptedAt?: string;
+  privacyAccepted?: boolean;
+  privacyAcceptedAt?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
   loading: boolean;
+  isSigningIn: boolean;
   isConfigured: boolean;
   signInWithGoogle: () => Promise<void>;
   signInWithFacebook: () => Promise<void>;
@@ -67,20 +72,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (snap.exists()) {
           const data = snap.data() as UserProfile;
           console.log("[Auth] fetchOrCreateProfile: found existing profile", { coolId: data.coolId });
+
+          if (!data.coolId) {
+            try {
+              const { collection, query, where, getDocs, limit } = await import("firebase/firestore");
+              const q = query(collection(database, "usernames"), where("uid", "==", firebaseUser.uid), limit(1));
+              const unameSnap = await getDocs(q);
+              if (!unameSnap.empty) {
+                const recoveredId = unameSnap.docs[0].id;
+                await setDoc(userRef, { coolId: recoveredId }, { merge: true });
+                data.coolId = recoveredId;
+                console.log("[Auth] fetchOrCreateProfile: recovered missing coolId", recoveredId);
+              }
+            } catch (e) {
+              console.warn("[Auth] fetchOrCreateProfile: could not recover coolId", e);
+            }
+          }
+
           return data;
         }
         console.log("[Auth] fetchOrCreateProfile: no existing profile, creating new");
-        const newProfile: UserProfile = {
+        const newProfile: Partial<UserProfile> = {
           uid: firebaseUser.uid,
           email: firebaseUser.email ?? null,
           displayName: firebaseUser.displayName ?? null,
           photoURL: firebaseUser.photoURL ?? null,
-          coolId: null,
           createdAt: new Date().toISOString(),
         };
-        await setDoc(userRef, newProfile);
-        console.log("[Auth] fetchOrCreateProfile: created new profile");
-        return newProfile;
+        await setDoc(userRef, newProfile, { merge: true });
+        console.log("[Auth] fetchOrCreateProfile: created new profile / merged defaults");
+        // Re-fetch to get complete object
+        const finalSnap = await getDoc(userRef);
+        return (finalSnap.exists() ? finalSnap.data() : { ...newProfile, coolId: null }) as UserProfile;
       } catch (err) {
         console.warn("[Auth] fetchOrCreateProfile: error (retries left:", retries, ")", err);
         const isOffline =
@@ -157,6 +180,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (firebaseUser) {
           const p = await fetchOrCreateProfile(firebaseUser);
           setProfile(p);
+          // Map this IP to the logged-in user so anonymous feedback history is linked
+          try {
+            const { httpsCallable } = await import("firebase/functions");
+            const { getAppFunctions } = await import("@/lib/functions");
+            const functions = getAppFunctions();
+            if (functions) {
+              await httpsCallable(functions, "mapIpToUser")({});
+            }
+          } catch {
+            // non-critical — don't fail auth if this errors
+          }
         } else {
           setProfile(null);
         }
@@ -166,7 +200,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (msg.includes("permission-denied") || msg.includes("FirebaseError")) {
           console.error("[Auth] Firestore blocked — ensure firestore.rules allow users/{userId} when request.auth.uid == userId");
         }
-        setProfile(firebaseUser ? { uid: firebaseUser.uid, email: firebaseUser.email ?? null, displayName: firebaseUser.displayName ?? null, photoURL: firebaseUser.photoURL ?? null, coolId: null, createdAt: "" } : null);
+        setProfile(null);
+        // Don't set a fake profile with coolId: null, as it triggers a redirect to /create-id
       } finally {
         setLoading(false);
       }
@@ -178,13 +213,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
+  const [isSigningIn, setIsSigningIn] = useState(false);
+
   const signInWithProvider = async (providerType: AuthProviderType) => {
     if (!auth) {
       console.error("[Auth] Firebase not configured");
       throw new Error("Firebase not configured");
     }
 
-    let provider;
+    if (isSigningIn) {
+      console.log("[Auth] Sign-in already in progress, ignoring");
+      return;
+    }
+
+    setIsSigningIn(true);
+    try {
+      let provider;
     switch (providerType) {
       case "google":
         provider = new GoogleAuthProvider();
@@ -223,6 +267,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log("[Auth] signInWithProvider(" + providerType + "): redirecting...");
       await signInWithRedirect(auth, provider);
     }
+    } finally {
+      setIsSigningIn(false);
+    }
   };
 
   const signOut = async () => {
@@ -236,6 +283,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     profile,
     loading,
+    isSigningIn,
     isConfigured: !!auth,
     signInWithGoogle: () => signInWithProvider("google"),
     signInWithFacebook: () => signInWithProvider("facebook"),

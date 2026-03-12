@@ -20,8 +20,8 @@ messaging.onBackgroundMessage((payload) => {
   const link = payload.notification?.click_action || payload.data?.link || (payload.data?.imageId ? `/f?imageId=${payload.data.imageId}` : "/dashboard");
   const options = {
     body: payload.notification?.body || "Someone reacted to your post",
-    icon: "/icon.svg",
-    badge: "/icon.svg",
+    icon: "/logo.svg",
+    badge: "/logo.svg",
     data: { ...(payload.data || {}), link },
   };
   self.registration.showNotification(title, options);

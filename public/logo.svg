@@ -1,0 +1,19 @@
+<svg width="150" height="40" viewBox="0 0 150 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@900&amp;display=swap');
+      .logo-text {
+        font-family: 'Nunito', system-ui, sans-serif;
+        font-size: 32px;
+        font-weight: 900;
+        letter-spacing: -0.04em;
+        fill: #FFFFFF;
+      }
+      .logo-dot {
+        fill: #FF3D7F;
+      }
+    </style>
+  </defs>
+  
+  <text x="0" y="32" class="logo-text">picpop<tspan class="logo-dot">.</tspan></text>
+</svg>

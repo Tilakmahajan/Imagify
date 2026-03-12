@@ -10,6 +10,8 @@ import { GlobalLoader } from "@/components/GlobalLoader";
 import { NotificationTitleUpdater } from "@/components/NotificationTitleUpdater";
 import { AddToHomeScreenPrompt } from "@/components/AddToHomeScreenPrompt";
 import { ThemeProvider } from "@/lib/theme-context";
+import { GlobalNotifications } from "@/components/GlobalNotifications";
+import { AdSenseScript } from "@/components/AdSenseScript";
 import "./globals.css";
 
 const nunito = Nunito({
@@ -28,8 +30,8 @@ export const metadata: Metadata = {
   description: "Share honest feedback anonymously with images. No sign-up, no tracking. Just upload and send.",
   manifest: "/manifest.json",
   icons: {
-    icon: "/icon.svg",
-    apple: "/icon.svg",
+    icon: "/logo.svg",
+    apple: "/logo.svg",
   },
 };
 
@@ -39,8 +41,31 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark" suppressHydrationWarning>
-      <head />
+    <html lang="en" suppressHydrationWarning>
+      <head>
+        <Script
+          src={`https://www.googletagmanager.com/gtag/js?id=G-ZNH6TJ4XQZ`}
+          strategy="afterInteractive"
+        />
+        <Script id="google-analytics" strategy="afterInteractive">
+          {`
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){dataLayer.push(arguments);}
+            gtag('js', new Date());
+
+            gtag('config', 'G-ZNH6TJ4XQZ');
+          `}
+        </Script>
+        <Script id="microsoft-clarity" strategy="afterInteractive">
+          {`
+            (function(c,l,a,r,i,t,y){
+                c[a]=c[a]||function(){(c[a].q=c[a].q||[]).push(arguments)};
+                t=l.createElement(r);t.async=1;t.src="https://www.clarity.ms/tag/"+i;
+                y=l.getElementsByTagName(r)[0];y.parentNode.insertBefore(t,y);
+            })(window, document, "clarity", "script", "vrhrengf1s");
+          `}
+        </Script>
+      </head>
       <body
         className={`${nunito.variable} ${geistMono.variable} antialiased bg-[var(--bg-primary)] text-[var(--text-primary)]`}
         suppressHydrationWarning
@@ -55,15 +80,13 @@ export default function RootLayout({
               <CursorGlow />
               <GlobalLoader />
               <AddToHomeScreenPrompt />
+              <GlobalNotifications />
             </LoadingProvider>
           </ToastProvider>
         </AuthProvider>
         </ThemeProvider>
-        <Script
-          src={`https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=${process.env.NEXT_PUBLIC_ADSENSE_CLIENT || "ca-pub-9913239924968431"}`}
-          strategy="beforeInteractive"
-          crossOrigin="anonymous"
-        />
+        <AdSenseScript />
+
       </body>
     </html>
   );

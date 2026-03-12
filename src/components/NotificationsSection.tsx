@@ -17,7 +17,6 @@ import { db, ensureFirestoreNetwork } from "@/lib/firebase";
 import {
   requestNotificationPermission,
   saveFcmToken,
-  onForegroundMessage,
 } from "@/lib/notifications";
 import { useToast } from "@/lib/toast-context";
 
@@ -140,20 +139,6 @@ export function NotificationsSection({ userId }: NotificationsSectionProps) {
     return () => unsub?.();
   }, [userId, toast]);
 
-  // FCM foreground messages (backup when Firestore may lag slightly)
-  useEffect(() => {
-    let unsub: (() => void) | undefined;
-    onForegroundMessage((payload) => {
-      const body = payload.notification?.body ?? payload.data?.body ?? payload.data?.message;
-      const title = payload.notification?.title ?? payload.data?.title;
-      if (body || title) {
-        setToastMsg(body || title || "New activity");
-        toast.info(body || title || "New activity");
-        setTimeout(() => setToastMsg(null), 4000);
-      }
-    }).then((fn) => { unsub = fn; });
-    return () => unsub?.();
-  }, [toast]);
 
   const handleEnableNotifications = async () => {
     if (notifStatus === "enabled" || notifStatus === "unsupported") return;

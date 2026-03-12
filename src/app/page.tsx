@@ -46,7 +46,8 @@ export default function Home() {
           background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E");
           pointer-events: none;
           z-index: 9999;
-          opacity: 0.35;
+          opacity: 0.25; /* Reduced slightly for mobile */
+          transform: translateZ(0); /* Force GPU */
         }
 
         /* ── Scrollbar ── */
@@ -103,9 +104,11 @@ export default function Home() {
           letter-spacing: -0.01em;
           border: 2.5px solid rgba(255,255,255,0.25);
           backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
           white-space: nowrap;
           cursor: default;
           transition: transform 0.2s, box-shadow 0.2s;
+          transform: translateZ(0);
         }
         .sticker:hover { transform: scale(1.08) rotate(-2deg) !important; }
 
@@ -144,13 +147,17 @@ export default function Home() {
         }
 
         /* ── Navbar glass (theme from globals) ── */
-        .navbar-glass { border-bottom: 1px solid var(--border); }
+        .navbar-glass { 
+          border-bottom: 1px solid var(--border);
+          transform: translateZ(0);
+        }
 
         /* ── CTA button ── */
         .cta-btn {
           position: relative;
           overflow: hidden;
           transition: transform 0.25s, box-shadow 0.25s;
+          will-change: transform, box-shadow;
         }
         .cta-btn::after {
           content: '';
@@ -204,13 +211,8 @@ export default function Home() {
 
           {/* Logo */}
           <Link href="/" className="flex items-center gap-2 group">
-            <span
-              className="text-2xl font-black tracking-tight text-[var(--text-primary)] transition-all duration-300 group-hover:scale-105 inline-block"
-              style={{ letterSpacing: "-0.04em" }}
-            >
-              picpop
-              <span className="text-[var(--pink)]">.</span>
-            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="picpop" className="h-6 sm:h-7 w-auto transition-transform duration-300 group-hover:scale-105 inline-block" />
           </Link>
 
           {/* Desktop nav */}
@@ -273,7 +275,7 @@ export default function Home() {
           >
             <div className="w-[200px] h-[260px] xl:w-[230px] xl:h-[300px] rounded-[22px] overflow-hidden bg-black relative">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/image (1).jpg" alt="feedback preview" className="w-full h-full object-cover" />
+              <img src="/images/image (1).jpg" alt="feedback preview" className="w-full h-full object-cover" loading="lazy" />
               {/* Overlay shimmer */}
               <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
             </div>
@@ -294,7 +296,7 @@ export default function Home() {
           >
             <div className="w-[200px] h-[260px] xl:w-[230px] xl:h-[300px] rounded-[22px] overflow-hidden bg-black relative">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/images/image (2).jpg" alt="feedback preview" className="w-full h-full object-cover" />
+              <img src="/images/image (2).jpg" alt="feedback preview" className="w-full h-full object-cover" loading="lazy" />
               <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
             </div>
           </div>
@@ -304,17 +306,17 @@ export default function Home() {
         <div className="absolute hidden sm:block float" style={{ top: "9%", left: "7%", zIndex: 20, "--r": "-6deg" } as React.CSSProperties}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/image1.png" alt="" className="w-28 h-28 md:w-40 md:h-40 xl:w-44 xl:h-44 object-contain"
-            style={{ filter: "drop-shadow(0 20px 40px rgba(0,0,0,0.6))" }} />
+            style={{ filter: "drop-shadow(0 20px 40px rgba(0,0,0,0.6))" }} loading="lazy" />
         </div>
         <div className="absolute hidden sm:block float" style={{ top: "7%", right: "6%", zIndex: 20, animationDelay: "0.7s", "--r": "5deg" } as React.CSSProperties}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/image2.png" alt="" className="w-32 h-32 md:w-44 md:h-44 xl:w-52 xl:h-52 object-contain"
-            style={{ filter: "drop-shadow(0 20px 40px rgba(0,0,0,0.5))" }} />
+            style={{ filter: "drop-shadow(0 20px 40px rgba(0,0,0,0.5))" }} loading="lazy" />
         </div>
         <div className="absolute hidden md:block float" style={{ bottom: "8%", left: "12%", zIndex: 20, animationDelay: "0.4s", animationDuration: "5s" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/image3.png" alt="" className="w-20 h-20 md:w-28 md:h-28 xl:w-32 xl:h-32 object-contain"
-            style={{ filter: "drop-shadow(0 12px 28px rgba(0,0,0,0.5))" }} />
+            style={{ filter: "drop-shadow(0 12px 28px rgba(0,0,0,0.5))" }} loading="lazy" />
         </div>
 
         {/* ── Hero text ── */}
@@ -396,17 +398,17 @@ export default function Home() {
         <div className="absolute top-10 left-[5%] float hidden sm:block" style={{ zIndex: 5, animationDuration: "4s" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/image1.png" alt="" className="w-28 h-28 md:w-36 md:h-36 object-contain opacity-70"
-            style={{ filter: "drop-shadow(0 16px 32px rgba(0,0,0,0.8))" }} />
+            style={{ filter: "drop-shadow(0 16px 32px rgba(0,0,0,0.8))" }} loading="lazy" />
         </div>
         <div className="absolute top-8 right-[4%] float hidden sm:block" style={{ zIndex: 5, animationDuration: "5s", animationDelay: "0.6s" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/image2.png" alt="" className="w-32 h-32 md:w-44 md:h-44 object-contain opacity-70"
-            style={{ filter: "drop-shadow(0 16px 32px rgba(0,0,0,0.7))" }} />
+            style={{ filter: "drop-shadow(0 16px 32px rgba(0,0,0,0.7))" }} loading="lazy" />
         </div>
         <div className="absolute bottom-10 left-[3%] float hidden md:block" style={{ zIndex: 5, animationDelay: "0.3s", animationDuration: "6s" }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img src="/images/image3.png" alt="" className="w-24 h-24 md:w-32 md:h-32 object-contain opacity-70"
-            style={{ filter: "drop-shadow(0 12px 24px rgba(0,0,0,0.7))" }} />
+            style={{ filter: "drop-shadow(0 12px 24px rgba(0,0,0,0.7))" }} loading="lazy" />
         </div>
 
         {/* ── Left response image bubbles ── */}
@@ -667,20 +669,19 @@ export default function Home() {
       ================================================================ */}
       <footer className="border-t border-white/06 bg-[#080808] py-10 px-6">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-6">
-          <div className="flex flex-col items-center sm:items-start gap-1">
-            <span
-              className="text-xl font-black bg-clip-text text-transparent"
-              style={{ backgroundImage: "linear-gradient(90deg, var(--pink), var(--purple))" }}
-            >
-              picpop.
-            </span>
+          <div className="flex flex-col items-center sm:items-start gap-3">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="picpop" className="h-5 sm:h-6 w-auto opacity-90" />
             <p className="text-xs text-white/20 font-semibold">anonymous image feedback</p>
           </div>
 
           <div className="flex flex-wrap justify-center gap-6 text-sm">
+            <Link href="/about" className="footer-link">about</Link>
             <Link href="#how" className="footer-link">how it works</Link>
             <Link href="#play" className="footer-link">play</Link>
             <Link href="/dashboard" className="footer-link">give feedback</Link>
+            <Link href="/privacy" className="footer-link">privacy</Link>
+            <Link href="/terms" className="footer-link">terms</Link>
           </div>
 
           {/* Social-style pill */}

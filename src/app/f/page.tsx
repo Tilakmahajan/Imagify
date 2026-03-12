@@ -23,6 +23,7 @@ import { ReportFeedbackModal } from "@/components/ReportFeedbackModal";
 import { ConfirmModal } from "@/components/ConfirmModal";
 import { useToast } from "@/lib/toast-context";
 import { useLoading } from "@/lib/loading-context";
+import { TermsModal } from "@/components/TermsModal";
 
 interface Feedback {
   id: string;
@@ -81,9 +82,8 @@ function FeedbackThreadItem({
     <div className={depth > 0 ? "ml-6 sm:ml-8 mt-3 border-l-2 border-white/10 pl-3 sm:pl-4" : ""}>
       <div className="relative inline-block group">
         <div
-          className={`rounded-xl overflow-hidden bg-white/5 border inline-block max-w-[180px] sm:max-w-[220px] transition-colors cursor-pointer ${
-            isReplying ? "border-[var(--pink)] ring-2 ring-[var(--pink)]/30" : "border-white/5"
-          }`}
+          className={`rounded-xl overflow-hidden bg-white/5 border inline-block max-w-[180px] sm:max-w-[220px] transition-colors cursor-pointer ${isReplying ? "border-[var(--pink)] ring-2 ring-[var(--pink)]/30" : "border-white/5"
+            }`}
           onClick={() => !isReplying && isOwner && onShare?.(feedback)}
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -176,7 +176,15 @@ function FeedbackOnImageContent() {
   const [submitted, setSubmitted] = useState(false);
   const [replyingTo, setReplyingTo] = useState<string | null>(null);
   const [fetchAttempted, setFetchAttempted] = useState(false);
+  const [showTerms, setShowTerms] = useState(() => {
+    if (typeof window !== "undefined") {
+      const universal = localStorage.getItem("picpop_legal_v1") === "true";
+      if (universal) return false;
+    }
+    return false;
+  });
   const { setPageLoading, setActionLoading } = useLoading();
+  const { profile, loading: authLoadingState } = useAuth();
 
   useEffect(() => {
     if (!db) {
@@ -258,6 +266,29 @@ function FeedbackOnImageContent() {
     init();
     return () => unsub?.();
   }, [imageId, user?.uid, authLoading]);
+
+  useEffect(() => {
+    // 1. FAST CHECK: If this device has accepted terms, don't show the modal
+    if (typeof window !== "undefined") {
+      const universal = localStorage.getItem("picpop_legal_v1") === "true";
+      const userSpecific = user?.uid ? localStorage.getItem(`picpop_terms_accepted_${user.uid}`) === "true" : false;
+      
+      if (universal || userSpecific) {
+        setShowTerms(false);
+        return;
+      }
+    }
+
+    // 2. BACKUP CHECK: If profile is loaded, check Firestore status
+    if (!authLoading && !authLoadingState && user && profile && profile.coolId) {
+      const isAcceptedInStore = profile.termsAccepted && profile.privacyAccepted;
+      if (!isAcceptedInStore) {
+        setShowTerms(true);
+      } else {
+        setShowTerms(false);
+      }
+    }
+  }, [user, profile, authLoading, authLoadingState]);
 
   const handleImageSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -347,8 +378,9 @@ function FeedbackOnImageContent() {
 
       <header className="navbar-glass sticky top-0 z-50 border-b border-[var(--border)]">
         <nav className="mx-auto flex h-16 max-w-2xl items-center justify-between px-4 sm:px-6">
-          <Link href="/" className="text-lg font-black tracking-tight">
-            picpop<span className="text-[var(--pink)]">.</span>
+          <Link href="/" className="flex items-center hover:scale-105 transition-transform duration-300">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="picpop" className="h-6 w-auto" />
           </Link>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -402,12 +434,12 @@ function FeedbackOnImageContent() {
                 snapshotData={
                   isOwner
                     ? {
-                        imageUrl: image.imageUrl,
-                        coolId: image.coolId,
-                        feedbackImageUrls: feedbacks
-                          .filter((f) => f.feedbackImageUrl)
-                          .map((f) => f.feedbackImageUrl),
-                      }
+                      imageUrl: image.imageUrl,
+                      coolId: image.coolId,
+                      feedbackImageUrls: feedbacks
+                        .filter((f) => f.feedbackImageUrl)
+                        .map((f) => f.feedbackImageUrl),
+                    }
                     : { imageUrl: image.imageUrl, coolId: image.coolId, feedbackImageUrls: [] }
                 }
               />
@@ -521,6 +553,7 @@ function FeedbackOnImageContent() {
           isOpen={!!shareModal}
           onClose={() => setShareModal(null)}
           singleFeedback={{ feedbackImageUrl: shareModal.feedbackImageUrl }}
+          feedbackId={shareModal.id}
           allData={{
             imageUrl: image.imageUrl,
             coolId: image.coolId,
@@ -534,6 +567,11 @@ function FeedbackOnImageContent() {
           }
         />
       )}
+
+      <TermsModal
+        isOpen={showTerms}
+        onAccept={() => setShowTerms(false)}
+      />
     </div>
   );
 }

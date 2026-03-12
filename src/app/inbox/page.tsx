@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, Fragment } from "react";
 import Link from "next/link";
-import { Bell, Eye, Image as ImageIcon, X, MoreVertical, Trash2, Flag } from "lucide-react";
+import { Bell, Eye, Image as ImageIcon, X, MoreVertical, Trash2, Flag, MessageSquare, Send } from "lucide-react";
 import {
   collection,
   query,
@@ -12,13 +12,16 @@ import {
   limit,
   writeBatch,
   doc,
+  getDoc,
+  getDocs,
 } from "firebase/firestore";
 import { db, ensureFirestoreNetwork } from "@/lib/firebase";
+import { httpsCallable, getFunctions } from "firebase/functions";
+import { getAppFunctions } from "@/lib/functions";
 import {
   requestNotificationPermission,
   saveFcmToken,
   clearFcmToken,
-  onForegroundMessage,
   getIosPushHint,
 } from "@/lib/notifications";
 import { useAuth } from "@/lib/auth-context";
@@ -26,7 +29,8 @@ import { useToast } from "@/lib/toast-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { FeedbackShareModal } from "@/components/FeedbackShareModal";
 import { ReportFeedbackModal } from "@/components/ReportFeedbackModal";
-import { GoogleAd } from "@/components/GoogleAd";
+import { TermsModal } from "@/components/TermsModal";
+import { getErrorMessage } from "@/lib/error-utils";
 
 function formatTimeAgo(iso: string) {
   const d = new Date(iso);
@@ -60,22 +64,53 @@ interface NotifItem {
   imageId?: string;
   coolId?: string;
   feedbackImageUrl?: string;
+  feedbackMessage?: string;
   feedbackId?: string;
+  anonymousId?: string;
+  submitterId?: string;
+  submitterIp?: string;
+  sessionId?: string;
+  isOwnerReply?: boolean;
+  targetUid?: string;
+  visitorId?: string;
+  recipientId?: string;
+}
+
+interface GroupedItem {
+  id: string;
+  itemType: "feedback" | "visit";
+  threadType: "inbox" | "sent";
+  threadPartnerId: string;
+  items: (NotifItem & { itemType: "feedback" | "visit" })[];
+  createdAt: string;
+  latestItem: NotifItem & { itemType: "feedback" | "visit" };
 }
 
 export default function InboxPage() {
   const { user, profile, loading } = useAuth();
+  const uid = user?.uid;
   const [notifications, setNotifications] = useState<NotifItem[]>([]);
   const [feedbacks, setFeedbacks] = useState<NotifItem[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [notifStatus, setNotifStatus] = useState<"idle" | "loading" | "enabled" | "denied" | "unsupported">("idle");
-  const [selectedFeedback, setSelectedFeedback] = useState<NotifItem | null>(null);
+  const [selectedGroup, setSelectedGroup] = useState<GroupedItem | null>(null);
+  const [feedbackDocId, setFeedbackDocId] = useState<string | null>(null);
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [optionsOpen, setOptionsOpen] = useState(false);
   const [reportModalOpen, setReportModalOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [filter, setFilter] = useState<"all" | "responses">("all");
+  const [replyText, setReplyText] = useState("");
+  const [sendingReply, setSendingReply] = useState(false);
+  const [profileCache, setProfileCache] = useState<Record<string, string>>({});
+  const [showTerms, setShowTerms] = useState(() => {
+    if (typeof window !== "undefined") {
+      const universal = localStorage.getItem("picpop_legal_v1") === "true";
+      if (universal) return false;
+    }
+    return false;
   const optionsRef = useRef<HTMLDivElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
+  const viewStartTime = useRef<number>(0);
   const toast = useToast();
 
   useEffect(() => {
@@ -116,7 +151,6 @@ export default function InboxPage() {
           query(
             collection(firestore, "notifications"),
             where("recipientId", "==", uid),
-            orderBy("createdAt", "desc"),
             limit(100)
           ),
           (snap) => {
@@ -132,7 +166,17 @@ export default function InboxPage() {
                   imageId: data.imageId,
                   coolId: data.coolId || "post",
                   feedbackImageUrl: data.feedbackImageUrl,
+                  feedbackMessage: data.feedbackMessage,
                   feedbackId: data.feedbackId,
+                  anonymousId: data.anonymousId,
+                  status: data.submitterId ? "verified" : "anonymous",
+                  submitterId: data.submitterId,
+                  submitterIp: data.submitterIp,
+                  sessionId: data.sessionId,
+                  isOwnerReply: data.isOwnerReply === true,
+                  recipientId: data.recipientId,
+                  visitorId: data.visitorId,
+                  targetUid: data.targetUid,
                 };
               })
             );
@@ -143,35 +187,87 @@ export default function InboxPage() {
           }
         );
 
+        const processFeedbacks = (snap: any) => {
+          const items = snap.docs
+            .filter((d: any) => d.data().deleted !== true)
+            .map((d: any) => {
+              const data = d.data();
+              return {
+                id: d.id,
+                message: "New feedback",
+                isRead: false,
+                createdAt: toIsoString(data.createdAt),
+                type: "anonymous_feedback" as const,
+                feedbackImageUrl: data.feedbackImageUrl,
+                feedbackMessage: data.message || data.feedbackMessage,
+                anonymousId: data.anonymousId,
+                submitterId: data.submitterId,
+                submitterIp: data.submitterIp,
+                sessionId: data.sessionId,
+                isOwnerReply: data.isOwnerReply === true,
+                recipientId: data.recipientId,
+                visitorId: data.visitorId,
+                targetUid: data.targetUid,
+                coolId: "",
+              };
+            });
+
+          setFeedbacks(prev => {
+            const map = new Map(prev.map(i => [i.id, i]));
+            let changed = false;
+            for (const item of items) {
+              const existing = map.get(item.id);
+              if (!existing || JSON.stringify(existing) !== JSON.stringify(item)) {
+                // If this is a real item, check if it matches an optimistic one
+                if (!item.id.startsWith("opt_")) {
+                  for (const [k, v] of map.entries()) {
+                    if (k.startsWith("opt_") && v.feedbackMessage === item.feedbackMessage) {
+                      map.delete(k);
+                      changed = true;
+                    }
+                  }
+                }
+                map.set(item.id, item);
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            return Array.from(map.values()).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          });
+        };
+
         unsubF = onSnapshot(
           query(
             collection(firestore, "feedbacks"),
             where("recipientId", "==", uid),
-            orderBy("createdAt", "desc"),
             limit(100)
           ),
-          (snap) => {
-            setFeedbacks(
-              snap.docs
-                .filter((d) => d.data().deleted !== true)
-                .map((d) => {
-                  const data = d.data();
-                  return {
-                    id: d.id,
-                    message: "New feedback",
-                    isRead: false,
-                    createdAt: toIsoString(data.createdAt),
-                    type: "anonymous_feedback" as const,
-                    feedbackImageUrl: data.feedbackImageUrl,
-                    coolId: "",
-                  };
-                })
-            );
-          },
+          processFeedbacks,
           (err) => {
             if (err?.code !== "failed-precondition") console.warn("Feedbacks:", err);
           }
         );
+
+        // Also listen for feedbacks you SENT (so you see your own replies/messages in your inbox)
+        const unsubFSent = onSnapshot(
+          query(
+            collection(firestore, "feedbacks"),
+            where("submitterId", "==", uid),
+            limit(100)
+          ),
+          processFeedbacks,
+          (err) => {
+            if (err?.code !== "failed-precondition") console.warn("Sent Feedbacks:", err);
+          }
+        );
+
+        // Chain the cleanup
+        const originalUnsubF = unsubF;
+        unsubF = () => {
+          originalUnsubF?.();
+          unsubFSent?.();
+        };
+
       } catch {
         setNotifications([]);
         setFeedbacks([]);
@@ -182,18 +278,33 @@ export default function InboxPage() {
     run();
     return () => {
       unsubN?.();
-      unsubF?.();
+      if (typeof unsubF === 'function') unsubF();
     };
   }, [user?.uid]);
 
   useEffect(() => {
-    let unsub: (() => void) | undefined;
-    onForegroundMessage((payload) => {
-      const body = payload.notification?.body ?? payload.data?.body;
-      if (body) toast.info(body);
-    }).then((fn) => { unsub = fn; });
-    return () => unsub?.();
-  }, [toast]);
+    // 1. FAST CHECK: If this device has accepted terms, don't show the modal
+    if (typeof window !== "undefined") {
+      const universal = localStorage.getItem("picpop_legal_v1") === "true";
+      const userSpecific = user?.uid ? localStorage.getItem(`picpop_terms_accepted_${user.uid}`) === "true" : false;
+
+      if (universal || userSpecific) {
+        setShowTerms(false);
+        return;
+      }
+    }
+
+    // 2. BACKUP CHECK: If profile is loaded, check Firestore status
+    if (!loading && user && profile && profile.coolId) {
+      const isAcceptedInStore = profile.termsAccepted && profile.privacyAccepted;
+      if (!isAcceptedInStore) {
+        setShowTerms(true);
+      } else {
+        setShowTerms(false);
+      }
+    }
+  }, [user, profile, loading]);
+
 
   const handleEnableNotifications = async () => {
     if (notifStatus === "enabled" || notifStatus === "unsupported") return;
@@ -216,12 +327,14 @@ export default function InboxPage() {
       } else {
         const perm = typeof Notification !== "undefined" ? Notification.permission : "denied";
         setNotifStatus(perm === "denied" ? "denied" : "idle");
-        if (perm === "denied") toast.error("Notifications blocked");
+        if (perm === "denied") {
+          toast.error("Notifications blocked by browser. Click the lock icon in the address bar to reset permissions.");
+        }
       }
     } catch (err) {
       console.error("Enable notifications:", err);
       setNotifStatus("idle");
-      toast.error("Could not enable notifications");
+      toast.error(getErrorMessage(err));
     }
   };
 
@@ -239,10 +352,91 @@ export default function InboxPage() {
     }
   };
 
-  const feedbackDocId = selectedFeedback ? ((selectedFeedback as NotifItem & { feedbackId?: string }).feedbackId || selectedFeedback.id) : null;
+  const latestFeedbackId = selectedGroup ? (selectedGroup.latestItem.feedbackId || selectedGroup.latestItem.id) : null;
+
+  useEffect(() => {
+    if (!selectedGroup || !latestFeedbackId) return;
+    setReplyText("");
+    viewStartTime.current = Date.now();
+
+    const logView = async () => {
+      try {
+        const { httpsCallable } = await import("firebase/functions");
+        const { getAppFunctions } = await import("@/lib/functions");
+        const functions = getAppFunctions();
+        if (functions) {
+          await httpsCallable(functions, "logFeedbackActivity")({ feedbackId: latestFeedbackId, type: "view" });
+        }
+      } catch (err) { }
+    };
+    logView();
+
+    return () => {
+      const timeSpent = Date.now() - viewStartTime.current;
+      if (timeSpent > 500) {
+        const logTime = async () => {
+          try {
+            const { httpsCallable } = await import("firebase/functions");
+            const { getAppFunctions } = await import("@/lib/functions");
+            const functions = getAppFunctions();
+            if (functions) {
+              await httpsCallable(functions, "logFeedbackActivity")({ feedbackId: latestFeedbackId, type: "time", timeSpent });
+            }
+          } catch (err) { }
+        };
+        logTime();
+      }
+    };
+  }, [selectedGroup, latestFeedbackId]);
+
+  const handleShareClick = () => {
+    if (!feedbackDocId) return;
+    setShareModalOpen(true);
+    const logReshare = async () => {
+      try {
+        const { httpsCallable } = await import("firebase/functions");
+        const { getAppFunctions } = await import("@/lib/functions");
+        const functions = getAppFunctions();
+        if (functions) {
+          await httpsCallable(functions, "logFeedbackActivity")({ feedbackId: feedbackDocId, type: "reshare" });
+        }
+      } catch (err) { }
+    };
+    logReshare();
+  };
+
+  const handleSelectItem = async (group: GroupedItem) => {
+    setSelectedGroup(group);
+    // Also set feedbackDocId so the report/share modal has a valid ID immediately
+    const docId = group.latestItem.feedbackId || group.latestItem.id;
+    setFeedbackDocId(docId);
+
+    // Mark all unread notifications in this group as read
+    const unreadIds = group.items
+      .filter((i: NotifItem) => !i.isRead)
+      .map((i: NotifItem) => {
+        if (notifications.some((n: NotifItem) => n.id === i.id)) return i.id;
+        const linkedNotif = notifications.find((n: NotifItem) => n.feedbackId === i.id);
+        return linkedNotif?.id;
+      })
+      .filter((id): id is string => !!id);
+
+    if (unreadIds.length > 0 && db) {
+      try {
+        const firestoreDb = db;
+        const batch = writeBatch(firestoreDb);
+        unreadIds.forEach(id => {
+          batch.update(doc(firestoreDb, "notifications", id), { isRead: true });
+        });
+        await batch.commit();
+      } catch (err) {
+        console.error("Error marking group as read:", err);
+      }
+    }
+  };
 
   const handleDelete = async () => {
-    if (!feedbackDocId || !user) return;
+    if (!feedbackDocId || !user || !selectedGroup) return;
     setOptionsOpen(false);
     setDeleting(true);
     try {
@@ -251,16 +445,116 @@ export default function InboxPage() {
       const functions = getAppFunctions();
       if (!functions) throw new Error("Firebase not configured");
       const deleteInboxFeedback = httpsCallable<{ feedbackId: string }, { success: boolean }>(functions, "deleteInboxFeedback");
-      await deleteInboxFeedback({ feedbackId: feedbackDocId });
-      setSelectedFeedback(null);
-      toast.success("Deleted");
+
+      for (const item of selectedGroup.items) {
+        const id = item.feedbackId || item.id;
+        if (id) {
+          try {
+            await deleteInboxFeedback({ feedbackId: id });
+          } catch (e) { }
+        }
+      }
+      setSelectedGroup(null);
+      toast.success("Chat deleted");
     } catch (err) {
       console.error(err);
-      toast.error("Could not delete");
+      toast.error(getErrorMessage(err));
     } finally {
       setDeleting(false);
     }
   };
+
+  // ─── FIXED handleSendReply ────────────────────────────────────────────────
+  const handleSendReply = async () => {
+    if (!replyText.trim() || !selectedGroup || !user) return;
+
+    const text = replyText.trim();
+    const items = selectedGroup.items;
+
+    // Find the original non-owner message — this is the person we're replying TO
+    const originalMessage =
+      items.find(i => !i.isOwnerReply && i.submitterId !== uid) ??
+      items.find(i => !i.isOwnerReply) ??
+      items.find(i => i.submitterId !== uid) ??
+      items[0];
+
+    // Partner's Firebase UID — only set if they are a verified (logged-in) user
+    const partnerSubmitterId =
+      originalMessage?.submitterId && originalMessage.submitterId !== uid
+        ? originalMessage.submitterId
+        : null;
+
+    // Anonymous / visitor routing identifiers — prefer visitorId over anonymousId over sessionId
+    const visitorId = items.find(i => i.visitorId)?.visitorId ?? null;
+    const anonymousId = items.find(i => i.anonymousId)?.anonymousId ?? visitorId ?? null;
+    const sessionId = items.find(i => i.sessionId)?.sessionId ?? null;
+
+    // Final routing: UID takes priority, then anonymousId (which includes visitorId), then sessionId
+    const routingId = partnerSubmitterId ?? anonymousId ?? sessionId;
+
+    if (!routingId) {
+      toast.error("Cannot reply to this message");
+      return;
+    }
+
+    setReplyText("");
+
+    // Optimistic update — show message in UI immediately
+    const optId = "opt_" + Math.random().toString(36).substring(2, 9);
+    const optItem: NotifItem = {
+      id: optId,
+      message: text,
+      feedbackMessage: text,
+      createdAt: new Date().toISOString(),
+      isRead: true,
+      type: "anonymous_feedback",
+      isOwnerReply: true,
+      submitterId: uid,
+      recipientId: uid,
+      visitorId: visitorId ?? undefined,
+      targetUid: partnerSubmitterId ?? undefined,
+      sessionId: sessionId ?? undefined,
+      coolId: "",
+    };
+
+    setFeedbacks(prev => [...prev, optItem]);
+    setSendingReply(true);
+
+    try {
+      const functions = getAppFunctions();
+      if (!functions) throw new Error("Firebase not configured");
+
+      const submitOwnerReply = httpsCallable<{
+        message: string;
+        anonymousId: string;
+        targetUid: string | null;
+        sessionId: string | null;
+      }, { success: boolean }>(functions, "submitOwnerReply");
+
+      await submitOwnerReply({
+        message: text,
+        // When routing by UID, send empty anonymousId so the cloud function
+        // doesn't get confused about which path to take
+        anonymousId: partnerSubmitterId ? "" : (anonymousId ?? ""),
+        targetUid: partnerSubmitterId,
+        sessionId: sessionId,
+      });
+
+      // Remove optimistic item after listener has time to deliver the real doc
+      setTimeout(() => {
+        setFeedbacks(prev => prev.filter(f => f.id !== optId));
+      }, 2000);
+
+    } catch (err: unknown) {
+      // Roll back optimistic update and restore the draft text
+      setFeedbacks(prev => prev.filter(f => f.id !== optId));
+      setReplyText(text);
+      toast.error(getErrorMessage(err));
+    } finally {
+      setSendingReply(false);
+    }
+  };
+  // ─────────────────────────────────────────────────────────────────────────
 
   const handleMarkAllRead = async () => {
     const unread = notifications.filter((n) => !n.isRead);
@@ -278,28 +572,176 @@ export default function InboxPage() {
     }
   };
 
-  // Feedback items: notifications + feedbacks with image. Visit items: notifications with type "visit".
-  const fromNotifsFeedback = notifications.filter((n) => n.feedbackImageUrl);
-  const fromNotifsVisit = notifications.filter((n) => n.type === "visit");
-  const fromFeedbacks = feedbacks.filter((f) => f.feedbackImageUrl);
+  // Merge: use feedback doc data when available (it has anonymousId, isOwnerReply, etc.)
+  // Notifications fill in items not yet fetched via the feedbacks listener
+  const fromNotifsFeedback = notifications.filter((n) => n.feedbackImageUrl || n.feedbackMessage);
   const seenKeys = new Set<string>();
-  const feedbackItems = [...fromNotifsFeedback, ...fromFeedbacks]
-    .filter((item) => {
-      const key = (item as NotifItem & { feedbackId?: string }).feedbackId || item.id;
-      if (seenKeys.has(key)) return false;
+  const mergedFeedbackItems: NotifItem[] = [];
+
+  // First add all feedback documents (authoritative source)
+  for (const f of feedbacks) {
+    if (f.feedbackImageUrl || f.feedbackMessage) {
+      seenKeys.add(f.id);
+      mergedFeedbackItems.push(f);
+    }
+  }
+  // Then add notification items not already covered by a feedback doc
+  for (const n of fromNotifsFeedback) {
+    const key = (n as NotifItem & { feedbackId?: string }).feedbackId || n.id;
+    if (!seenKeys.has(key)) {
       seenKeys.add(key);
-      return true;
-    })
+      mergedFeedbackItems.push(n);
+    }
+  }
+
+  const feedbackItems = mergedFeedbackItems
     .map((item) => ({ ...item, itemType: "feedback" as const }));
+
+  // Profile resolution for Chats
+  useEffect(() => {
+    if (!db || feedbackItems.length === 0) return;
+    const itemsToResolve = feedbackItems.filter(item => {
+      const isMySentFeedbackToOther = item.submitterId === uid && item.recipientId !== uid;
+      return isMySentFeedbackToOther && item.recipientId && !profileCache[item.recipientId];
+    });
+
+    if (itemsToResolve.length === 0) return;
+
+    const resolve = async () => {
+      const newCache = { ...profileCache };
+      let changed = false;
+      for (const item of itemsToResolve) {
+        const rid = item.recipientId!;
+        const firestoreDb = db as any;
+        try {
+          const q = query(collection(firestoreDb, "usernames"), where("uid", "==", rid), limit(1));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            newCache[rid] = snap.docs[0].id;
+            changed = true;
+          }
+        } catch (e) {
+          console.error("Error resolving profile:", e);
+        }
+      }
+      if (changed) setProfileCache(newCache);
+    };
+    resolve();
+  }, [feedbackItems, uid, profileCache]);
+
+  const fromNotifsVisit = notifications.filter((n) => n.type === "visit");
   const visitItems = fromNotifsVisit.map((item) => ({ ...item, itemType: "visit" as const }));
   const allItems = [...feedbackItems, ...visitItems]
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-  const responsesItems = [...feedbackItems].sort(
-    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-  );
-  const filteredItems = filter === "responses" ? responsesItems : allItems;
+    .filter((item) => {
+      if (item.itemType === "visit") return true;
+      const isSentToMe = item.recipientId === uid;
+      const isSentByMe = item.submitterId === uid;
+      const isMyReplyAsOwner = item.submitterId === uid && item.isOwnerReply === true;
+      const isMySentFeedbackToOther = item.submitterId === uid && item.recipientId !== uid && item.isOwnerReply === false;
+      const isReplyToMySentFeedback = item.recipientId === uid && item.submitterId !== uid && item.isOwnerReply === true;
 
+      if (!isSentToMe && !isSentByMe && !isMyReplyAsOwner && !isMySentFeedbackToOther && !isReplyToMySentFeedback) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+
+  const groupedMap = new Map<string, GroupedItem>();
+
+  for (const item of allItems) {
+    if (item.itemType === "visit") {
+      const groupId = "all-visits";
+      if (!groupedMap.has(groupId)) {
+        groupedMap.set(groupId, {
+          id: groupId,
+          itemType: "visit",
+          threadType: "inbox",
+          threadPartnerId: "unknown",
+          items: [],
+          createdAt: item.createdAt,
+          latestItem: item,
+        });
+      }
+      const group = groupedMap.get(groupId)!;
+      group.items.push(item);
+      if (new Date(item.createdAt).getTime() > new Date(group.createdAt).getTime()) {
+        group.createdAt = item.createdAt;
+        group.latestItem = item;
+      }
+    } else {
+      let threadType: "inbox" | "sent" = "inbox";
+      let threadPartnerId = "unknown";
+
+      const isSentToMe = item.recipientId === uid;
+      const isSentByMe = item.submitterId === uid;
+
+      if (isSentToMe && isSentByMe && !item.isOwnerReply) {
+        threadType = "inbox";
+        threadPartnerId = "self-chat";
+      } else if (item.isOwnerReply) {
+        if (isSentByMe) {
+          threadType = "inbox";
+          threadPartnerId = item.visitorId || item.targetUid || item.anonymousId || item.sessionId || "unknown";
+        } else {
+          threadType = "sent";
+          threadPartnerId = item.submitterId || item.visitorId || item.anonymousId || "unknown";
+        }
+      } else {
+        if (isSentToMe) {
+          threadType = "inbox";
+          threadPartnerId = item.visitorId || item.submitterId || item.anonymousId || item.sessionId || "unknown";
+        } else {
+          threadType = "sent";
+          threadPartnerId = item.recipientId || "unknown";
+        }
+      }
+
+      // Stability: always use visitorId as the canonical partner key if available
+      if (item.visitorId && item.visitorId !== "unknown" && item.visitorId !== "unknown_partner") {
+        threadPartnerId = item.visitorId;
+      }
+
+      const groupId = `${threadType}_${threadPartnerId}`;
+
+      if (!groupedMap.has(groupId)) {
+        groupedMap.set(groupId, {
+          id: groupId,
+          itemType: "feedback",
+          threadType,
+          threadPartnerId,
+          items: [],
+          createdAt: item.createdAt,
+          latestItem: item,
+        });
+      }
+      const group = groupedMap.get(groupId)!;
+      group.items.push(item);
+      if (new Date(item.createdAt).getTime() > new Date(group.createdAt).getTime()) {
+        group.createdAt = item.createdAt;
+        group.latestItem = item;
+      }
+    }
+  }
+
+  const groupedItems = Array.from(groupedMap.values())
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+  const getGroupKey = (group: GroupedItem) => `${group.itemType}-${group.id}`;
+
+  // Derive the LIVE group from groupedItems so new messages appear without reopening
+  const activeGroup = selectedGroup
+    ? (groupedItems.find((g: GroupedItem) => g.id === selectedGroup.id) ?? selectedGroup)
+    : null;
   const unreadCount = notifications.filter((n) => !n.isRead).length;
+
+  // Scroll chat modal to bottom when new items arrive
+  useEffect(() => {
+    if (activeGroup) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [activeGroup?.items.length]);
 
   if (loading) {
     return (
@@ -324,8 +766,9 @@ export default function InboxPage() {
 
       <header className="navbar-glass sticky top-0 z-50 border-b border-[var(--border)]">
         <nav className="flex h-14 items-center justify-between px-4 max-w-[600px] mx-auto">
-          <Link href="/dashboard" className="text-lg font-black">
-            picpop<span className="text-[var(--pink)]">.</span>
+          <Link href="/dashboard" className="flex items-center hover:scale-105 transition-transform duration-300">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="picpop" className="h-6 w-auto" />
           </Link>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -346,35 +789,35 @@ export default function InboxPage() {
             </div>
             {notifStatus === "unsupported" ? (
               <span className="text-xs text-[var(--text-muted)]">Not supported</span>
-          ) : notifStatus === "denied" ? (
-            <span className="text-xs text-[var(--text-muted)]">Blocked by browser</span>
-          ) : notifStatus === "loading" ? (
-            <span className="text-xs font-bold text-[var(--text-muted)]">...</span>
-          ) : notifStatus === "enabled" ? (
-            <button
-              type="button"
-              onClick={handleDisableNotifications}
-              className="relative w-12 h-7 rounded-full transition-colors flex-shrink-0 cursor-pointer"
-              style={{ background: "var(--green)" }}
-              aria-label="Turn off notifications"
-            >
-              <span
-                className="absolute top-1 right-1 w-5 h-5 rounded-full bg-white shadow"
-              />
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleEnableNotifications}
-              className="relative w-12 h-7 rounded-full transition-colors flex-shrink-0 cursor-pointer"
-              style={{ background: "var(--bg-secondary)", border: "2px solid var(--border)" }}
-              aria-label="Turn on notifications"
-            >
-              <span
-                className="absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow"
-              />
-            </button>
-          )}
+            ) : notifStatus === "denied" ? (
+              <span className="text-xs text-[var(--text-muted)]">Blocked by browser</span>
+            ) : notifStatus === "loading" ? (
+              <span className="text-xs font-bold text-[var(--text-muted)]">...</span>
+            ) : notifStatus === "enabled" ? (
+              <button
+                type="button"
+                onClick={handleDisableNotifications}
+                className="relative w-12 h-7 rounded-full transition-colors flex-shrink-0 cursor-pointer"
+                style={{ background: "var(--green)" }}
+                aria-label="Turn off notifications"
+              >
+                <span
+                  className="absolute top-1 right-1 w-5 h-5 rounded-full bg-white shadow"
+                />
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={handleEnableNotifications}
+                className="relative w-12 h-7 rounded-full transition-colors flex-shrink-0 cursor-pointer"
+                style={{ background: "var(--bg-secondary)", border: "2px solid var(--border)" }}
+                aria-label="Turn on notifications"
+              >
+                <span
+                  className="absolute top-1 left-1 w-5 h-5 rounded-full bg-white shadow"
+                />
+              </button>
+            )}
           </div>
           {getIosPushHint() && (
             <p className="text-xs text-amber-400/90">
@@ -393,32 +836,6 @@ export default function InboxPage() {
               Mark all read
             </button>
           )}
-          <div className="flex gap-1 ml-auto">
-            <button
-              type="button"
-              onClick={() => setFilter("all")}
-              style={{ touchAction: "manipulation" }}
-              className={`px-4 py-2 min-h-[36px] rounded-xl text-xs font-bold transition-colors ${
-                filter === "all"
-                  ? "bg-[var(--pink)] text-white"
-                  : "bg-white/5 text-[var(--text-muted)] hover:text-white"
-              }`}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              onClick={() => setFilter("responses")}
-              style={{ touchAction: "manipulation" }}
-              className={`px-4 py-2 min-h-[36px] rounded-xl text-xs font-bold transition-colors ${
-                filter === "responses"
-                  ? "bg-[var(--pink)] text-white"
-                  : "bg-white/5 text-[var(--text-muted)] hover:text-white"
-              }`}
-            >
-              Responses
-            </button>
-          </div>
         </div>
 
         {/* Feedback list */}
@@ -427,169 +844,274 @@ export default function InboxPage() {
             <div className="py-12 text-center">
               <div className="w-8 h-8 rounded-full border-2 border-transparent animate-spin mx-auto" style={{ borderTopColor: "var(--pink)" }} />
             </div>
-          ) : filteredItems.length === 0 ? (
+          ) : groupedItems.length === 0 ? (
             <div className="py-16 text-center">
               <ImageIcon className="w-14 h-14 text-[var(--text-muted)] mx-auto mb-4" />
-              <p className="font-semibold text-[var(--text-muted)]">
-                {filter === "responses" ? "No responses yet" : "No feedback yet"}
-              </p>
-              <p className="text-sm text-[var(--text-muted)] mt-1">
-                {filter === "responses" ? "Feedback with images will appear here" : "Share your link to get started"}
-              </p>
+              <p className="font-semibold text-[var(--text-muted)]">No messages yet</p>
+              <p className="text-sm text-[var(--text-muted)] mt-1">Share your link to get started</p>
               <Link href="/dashboard" className="mt-4 inline-block text-[var(--pink)] font-bold hover:underline">Go to dashboard</Link>
             </div>
           ) : (
             <>
-              {process.env.NEXT_PUBLIC_ADSENSE_SLOT && (
-                <GoogleAd slot={process.env.NEXT_PUBLIC_ADSENSE_SLOT} format="horizontal" className="mb-4" />
-              )}
-              {filteredItems.map((item, index) => (
-              <Fragment key={item.id}>
-                {index > 0 && index % 3 === 0 && process.env.NEXT_PUBLIC_ADSENSE_SLOT && (
-                  <GoogleAd slot={process.env.NEXT_PUBLIC_ADSENSE_SLOT} format="horizontal" className="my-4" />
-                )}
-                {item.itemType === "visit" ? (
-                  <div
-                    className="w-full p-4 rounded-xl border border-[var(--border)]"
-                    style={{ background: "var(--bg-card)" }}
-                  >
-                    <div className="flex gap-4">
-                      <div
-                        className="w-16 h-16 rounded-lg flex items-center justify-center shrink-0"
-                        style={{ background: "linear-gradient(135deg, rgba(0,200,255,0.2), rgba(0,200,255,0.05))" }}
-                      >
-                        <Eye className="w-8 h-8 text-[var(--blue)]" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-sm">Someone viewed your link</p>
-                        <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setSelectedFeedback(item)}
-                    className="w-full text-left p-4 rounded-xl border border-[var(--border)] hover:border-[var(--pink)]/30 transition-colors"
-                    style={{ background: "var(--bg-card)" }}
-                  >
-                    <div className="flex gap-4">
-                      <div className="w-16 h-16 rounded-lg overflow-hidden shrink-0 bg-black/20">
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={item.feedbackImageUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-sm">New feedback</p>
-                        <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
+              {groupedItems.map((item, index) => (
+                <Fragment key={getGroupKey(item)}>
+                  {item.itemType === "visit" ? (
+                    <div
+                      className="w-full p-4 rounded-xl border border-[var(--border)] cursor-pointer hover:bg-white/[0.02] transition-colors"
+                      style={{ background: "var(--bg-card)" }}
+                      onClick={() => handleSelectItem(item)}
+                    >
+                      <div className="flex gap-4">
+                        <div
+                          className="w-16 h-16 rounded-lg flex items-center justify-center shrink-0"
+                          style={{ background: "linear-gradient(135deg, rgba(0,200,255,0.2), rgba(0,200,255,0.05))" }}
+                        >
+                          <Eye className="w-8 h-8 text-[var(--blue)]" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-bold text-sm flex items-center gap-2">
+                            Someone viewed your link {item.items.length > 1 && <span className="text-[var(--text-muted)] text-xs">({item.items.length})</span>}
+                            {item.items.some(i => !i.isRead) && <span className="text-[10px] bg-[var(--pink)] text-white px-1.5 py-0.5 rounded-full font-black uppercase">New!</span>}
+                          </p>
+                          <p className="text-xs text-[var(--text-muted)]">{formatTimeAgo(item.createdAt)}</p>
+                        </div>
                       </div>
                     </div>
-                  </button>
-                )}
-              </Fragment>
-            ))}
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleSelectItem(item)}
+                      className="w-full text-left p-4 rounded-xl border border-[var(--border)] hover:border-[var(--pink)]/30 transition-all hover:bg-white/[0.02] group"
+                      style={{ background: "var(--bg-card)" }}
+                    >
+                      <div className="flex gap-4 items-center">
+                        <div className="w-20 h-20 rounded-xl overflow-hidden shrink-0 bg-black/20 flex items-center justify-center relative border border-white/5 shadow-lg transition-transform group-hover:scale-[1.02]">
+                          {(() => {
+                            const lastImageItem = [...item.items]
+                              .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+                              .find(i => i.feedbackImageUrl);
+
+                            if (lastImageItem?.feedbackImageUrl) {
+                              return <img src={lastImageItem.feedbackImageUrl} alt="" className="w-full h-full object-cover" loading="lazy" decoding="async" />;
+                            }
+                            return (
+                              <div className="absolute inset-0 bg-gradient-to-br from-pink-500/20 to-purple-500/20 flex items-center justify-center">
+                                <MessageSquare className="w-10 h-10 text-[var(--pink)] opacity-80" />
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="font-extrabold text-sm text-[var(--text-primary)] truncate flex items-center gap-2">
+                            {(() => {
+                              const last = item.latestItem;
+                              const isMe = last.submitterId === uid;
+                              if (last.feedbackMessage) return last.feedbackMessage;
+                              if (last.feedbackImageUrl) return isMe ? "You sent an image" : "Sent an image";
+                              return "New interaction";
+                            })()}
+
+                            {item.threadType === "sent" ? (
+                              <span className="text-[9px] bg-[var(--green)]/20 text-[var(--green)] px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter shrink-0 border border-[var(--green)]/30">
+                                @{item.threadPartnerId !== "unknown" ? (profileCache[item.threadPartnerId] || item.threadPartnerId.slice(0, 8)) : "User"}
+                              </span>
+                            ) : item.items.some(i => i.submitterId && i.submitterId !== uid && !i.isOwnerReply) ? (
+                              <span className="text-[9px] bg-[var(--blue)]/20 text-[var(--blue)] px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter shrink-0 border border-[var(--blue)]/30">Verified User</span>
+                            ) : (
+                              <span className="text-[9px] bg-white/10 text-[var(--text-muted)] px-1.5 py-0.5 rounded-md font-black uppercase tracking-tighter shrink-0 border border-white/10">Anonymous</span>
+                            )}
+                          </p>
+                          <p className="text-xs text-[var(--text-muted)] mt-1 font-semibold flex items-center gap-1.5">
+                            {item.items.some(i => !i.isRead) && <span className="w-1.5 h-1.5 rounded-full bg-[var(--pink)] animate-pulse"></span>}
+                            {item.items.length} {item.items.length === 1 ? 'message' : 'interactions'}
+                          </p>
+                          <p className="text-[10px] text-[var(--text-muted)] mt-2 font-medium opacity-60">{formatTimeAgo(item.createdAt)}</p>
+                        </div>
+                      </div>
+                    </button>
+                  )}
+                </Fragment>
+              ))}
             </>
           )}
         </div>
       </main>
 
-      {/* Feedback modal */}
-      {selectedFeedback && (
+      {/* Chat modal */}
+      {activeGroup && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay"
-          onClick={() => { setSelectedFeedback(null); setOptionsOpen(false); }}
+          onClick={() => { setSelectedGroup(null); setOptionsOpen(false); }}
         >
           <div
-            className="max-w-lg w-full min-h-[85vh] max-h-[95vh] rounded-2xl overflow-y-auto flex flex-col"
+            className="max-w-lg w-full min-h-[85vh] max-h-[95vh] rounded-2xl overflow-hidden flex flex-col relative"
             style={{ background: "var(--modal-card-bg)", border: "1px solid rgba(255,255,255,0.15)" }}
             onClick={(e) => e.stopPropagation()}
           >
-            {/* Header: close + options menu */}
-            <div className="flex items-center justify-between px-3 py-2 border-b border-[var(--border)]">
-              <p className="text-xs font-bold text-[var(--text-muted)]">{formatTimeAgo(selectedFeedback.createdAt)}</p>
-              <div className="flex items-center gap-1">
-                <div className="relative" ref={optionsRef}>
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-[var(--border)] bg-[#101010]/80 backdrop-blur-md sticky top-0 z-10">
+                <div className="flex items-center gap-3">
                   <button
                     type="button"
-                    onClick={() => setOptionsOpen(!optionsOpen)}
-                    disabled={deleting}
-                    className="p-2 rounded-lg hover:bg-white/5 text-[var(--text-muted)]"
-                    aria-label="More options"
+                    onClick={() => setSelectedGroup(null)}
+                    className="p-2 -ml-2 rounded-lg hover:bg-white/5 text-[var(--text-primary)]"
                   >
-                    <MoreVertical className="w-5 h-5" />
+                    <X className="w-5 h-5" />
                   </button>
-                  {optionsOpen && (
-                    <div
-                      className="absolute right-0 top-full mt-1 py-1 min-w-[140px] rounded-xl border border-[var(--border)] shadow-xl z-10"
-                      style={{ background: "var(--bg-card)" }}
-                    >
-                      <button
-                        type="button"
-                        onClick={handleDelete}
-                        disabled={deleting}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-red-500 hover:bg-white/5 disabled:opacity-50 min-h-[44px]"
-                        style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
-                      >
-                        <Trash2 className="w-4 h-4" /> Delete
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => { setOptionsOpen(false); setReportModalOpen(true); }}
-                        className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-[var(--text-primary)] hover:bg-white/5 min-h-[44px]"
-                        style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
-                      >
-                        <Flag className="w-4 h-4" /> Report
-                      </button>
-                    </div>
-                  )}
+                  <div>
+                    <p className="text-sm font-black text-[var(--text-primary)] flex items-center gap-2">
+                      {activeGroup.threadType === "sent"
+                        ? `@${activeGroup.threadPartnerId !== "unknown" ? (profileCache[activeGroup.threadPartnerId] || activeGroup.threadPartnerId.slice(0, 8)) : "User"}`
+                        : (activeGroup.items.find(i => !i.isOwnerReply && i.submitterId)) ? "Verified User" : "Anonymous User"}
+                    </p>
+                    <p className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest flex items-center gap-3">
+                      <span>{activeGroup?.items.length} {activeGroup?.items.length === 1 ? 'message' : 'messages'}</span>
+                      {activeGroup?.latestItem.sessionId && (
+                        <span className="opacity-40">SID: {activeGroup.latestItem.sessionId.slice(0, 8)}...</span>
+                      )}
+                    </p>
+                  </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setSelectedFeedback(null)}
-                  className="p-2 rounded-lg hover:bg-white/5 text-[var(--text-muted)]"
-                >
-                  <X className="w-5 h-5" />
-                </button>
+
+                <div className="flex items-center gap-1">
+                  <div className="relative" ref={optionsRef}>
+                    <button
+                      type="button"
+                      onClick={() => setOptionsOpen(!optionsOpen)}
+                      disabled={deleting}
+                      className="p-2 rounded-lg hover:bg-white/5 text-[var(--text-muted)]"
+                      aria-label="More options"
+                    >
+                      <MoreVertical className="w-5 h-5" />
+                    </button>
+                    {optionsOpen && (
+                      <div
+                        className="absolute right-0 top-full mt-1 py-1 min-w-[140px] rounded-xl border border-[var(--border)] shadow-xl z-10"
+                        style={{ background: "var(--bg-card)" }}
+                      >
+                        <button
+                          type="button"
+                          onClick={handleDelete}
+                          disabled={deleting}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-red-500 hover:bg-white/5 disabled:opacity-50 min-h-[44px]"
+                          style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
+                        >
+                          <Trash2 className="w-4 h-4" /> Delete Chat
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOptionsOpen(false);
+                            setFeedbackDocId(latestFeedbackId || "");
+                            setReportModalOpen(true);
+                          }}
+                          className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-sm font-bold text-[var(--text-primary)] hover:bg-white/5 min-h-[44px]"
+                          style={{ touchAction: "manipulation", WebkitTapHighlightColor: "transparent" }}
+                        >
+                          <Flag className="w-4 h-4" /> Report User
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto p-4 pb-2 flex flex-col gap-3" style={{ scrollbarWidth: "thin", scrollbarColor: "rgba(255,255,255,0.1) transparent" }}>
+                {activeGroup.items.slice().sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()).map((chatItem, idx) => {
+                  const isMe = chatItem.submitterId === uid || (chatItem.isOwnerReply && activeGroup.threadType === "inbox");
+                  return (
+                    <div key={idx} className={`flex flex-col gap-0.5 ${isMe ? "items-end" : "items-start"}`}>
+                      <div className={`flex items-end gap-2 max-w-[78%] ${isMe ? "flex-row-reverse" : ""}`}>
+                        <div className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-xs font-black text-white ${isMe
+                          ? "bg-gradient-to-br from-pink-500 to-purple-600"
+                          : chatItem.submitterId
+                            ? "bg-gradient-to-br from-blue-500 to-blue-600"
+                            : "bg-gradient-to-br from-gray-600 to-gray-700"
+                          }`}>
+                          {isMe ? "You" : chatItem.submitterId ? "V" : "U"}
+                        </div>
+                        <div className={`rounded-2xl px-4 py-2.5 ${isMe
+                          ? "rounded-br-sm text-white"
+                          : "rounded-bl-sm border border-[var(--border)]"
+                          }`}
+                          style={isMe
+                            ? { background: "linear-gradient(135deg, var(--pink), var(--purple))" }
+                            : { background: "var(--bg-secondary)" }}>
+                          {chatItem.feedbackImageUrl && (
+                            /* eslint-disable-next-line @next/next/no-img-element */
+                            <img src={chatItem.feedbackImageUrl} alt="img" className="rounded-xl max-w-[240px] w-full object-contain mb-1 cursor-pointer"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setFeedbackDocId(chatItem.feedbackId || chatItem.id);
+                                setShareModalOpen(true);
+                              }}
+                            />
+                          )}
+                          {chatItem.feedbackMessage && (
+                            <div className="flex flex-col gap-1">
+                              {chatItem.submitterId && !isMe && idx === 0 && (
+                                <span className="text-[8px] font-black text-blue-400 uppercase tracking-tighter">Verified Sender</span>
+                              )}
+                              <p className="text-sm font-semibold whitespace-pre-wrap leading-relaxed">{chatItem.feedbackMessage}</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <span className={`text-[10px] text-[var(--text-muted)] ${isMe ? "mr-9" : "ml-9"}`}>
+                        {formatTimeAgo(chatItem.createdAt)}
+                      </span>
+                    </div>
+                  );
+                })}
+                <div ref={chatEndRef} />
+              </div>
+
+              {/* Reply input */}
+              <div className="p-3 border-t border-[var(--border)] bg-[#101010]/80 backdrop-blur-md sticky bottom-0">
+                <div className="flex items-center gap-2">
+                  <textarea
+                    value={replyText}
+                    onChange={(e) => setReplyText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendReply();
+                      }
+                    }}
+                    placeholder="Type a reply... (Enter to send)"
+                    className="flex-1 max-h-32 min-h-[44px] rounded-2xl bg-white/5 border border-white/10 px-4 py-3 text-sm focus:outline-none focus:border-[var(--pink)] resize-none"
+                    rows={1}
+                  />
+                  <button
+                    type="button"
+                    disabled={!replyText.trim() || sendingReply}
+                    onClick={handleSendReply}
+                    className="p-2.5 rounded-full text-white hover:opacity-90 disabled:opacity-40 shrink-0 transition-all hover:scale-105"
+                    style={{ background: "linear-gradient(135deg, var(--pink), var(--purple))" }}
+                  >
+                    {sendingReply ? (
+                      <div className="w-4 h-4 border-2 border-white/50 border-t-white rounded-full animate-spin" />
+                    ) : (
+                      <Send className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
               </div>
             </div>
+          )}
 
-            <div className="p-4 pb-6 flex-1 min-h-0 flex flex-col">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={selectedFeedback.feedbackImageUrl}
-                alt="Feedback"
-                className="w-full rounded-xl object-contain max-h-[70vh] min-h-[280px]"
-              />
-
-              <div className="mt-5">
-                <button
-                  type="button"
-                  onClick={() => setShareModalOpen(true)}
-                  className="w-full py-3.5 rounded-xl font-bold text-white flex items-center justify-center gap-2 transition-all hover:opacity-90"
-                  style={{
-                    background: "linear-gradient(135deg, var(--pink), var(--purple))",
-                    boxShadow: "0 4px 20px rgba(255,61,127,0.3)",
-                    touchAction: "manipulation",
-                    WebkitTapHighlightColor: "transparent",
-                  }}
-                >
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-                  </svg>
-                  Share
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {selectedFeedback?.feedbackImageUrl && shareModalOpen && profile && (
+      {shareModalOpen && profile && (
         <FeedbackShareModal
           isOpen={shareModalOpen}
           onClose={() => setShareModalOpen(false)}
-          singleFeedback={{ feedbackImageUrl: selectedFeedback.feedbackImageUrl }}
+          singleFeedback={{
+            feedbackImageUrl: activeGroup?.items.find(i => (i.feedbackId || i.id) === feedbackDocId)?.feedbackImageUrl || ""
+          }}
+          feedbackId={feedbackDocId}
           allData={{
-            imageUrl: selectedFeedback.feedbackImageUrl,
+            imageUrl: activeGroup?.items.find(i => (i.feedbackId || i.id) === feedbackDocId)?.feedbackImageUrl || "",
             coolId: profile.coolId ?? "picpop",
             feedbackImageUrls: [],
           }}
@@ -598,16 +1120,21 @@ export default function InboxPage() {
         />
       )}
 
+      <TermsModal
+        isOpen={showTerms}
+        onAccept={() => setShowTerms(false)}
+      />
+
       <ReportFeedbackModal
         isOpen={reportModalOpen}
         onClose={() => setReportModalOpen(false)}
         feedbackId={feedbackDocId || ""}
         onReportSuccess={(action) => {
-          if (action === "block") toast.success("Report submitted. User blocked.");
-          else toast.success("Report submitted");
-          setSelectedFeedback(null);
+          if (action === "block") toast.success?.("Report submitted. User blocked.");
+          else toast.success?.("Report submitted");
+          setSelectedGroup(null);
         }}
-        onReportError={(msg) => toast.error(msg)}
+        onReportError={(msg) => toast.error?.(msg)}
       />
     </div>
   );
