@@ -93,91 +93,72 @@ exports.onFeedbackCreatedV2 = onDocumentCreated("feedbacks/{feedbackId}", async 
   if (!snap) return;
   const feedback = snap.data();
   const feedbackId = event.params.feedbackId;
-  const hasImage = !!feedback?.imageId;
-  const hasRecipient = !!feedback?.recipientId;
-  if (!hasImage && !hasRecipient) {
-    console.warn("onFeedbackCreated: feedback missing imageId and recipientId");
-    return;
-  }
+  const isOwnerReply = feedback.isOwnerReply === true;
 
   const db = getFirestore();
 
-  let ownerUserId;
-  let coolId = "someone";
-  let imageIdForLink = feedback.imageId || null;
-
-  if (hasRecipient) {
-    ownerUserId = feedback.recipientId;
-    const userSnap = await db.doc(`users/${ownerUserId}`).get();
-    if (!userSnap.exists) return;
-    coolId = userSnap.data()?.coolId || "someone";
-  } else {
-    const imageSnap = await db.doc(`images/${feedback.imageId}`).get();
-    if (!imageSnap.exists) return;
-    const imageData = imageSnap.data();
-    ownerUserId = imageData?.userId;
-    if (!ownerUserId) return;
-    coolId = imageData?.coolId || "someone";
-  }
-
-  if (feedback.isOwnerReply === true || (feedback.submitterId && feedback.submitterId === ownerUserId)) {
-    console.log("Feedback created by owner, skipping notification.");
-    return;
-  }
-
   try {
-    const userSnap = await db.doc(`users/${ownerUserId}`).get();
-    if (!userSnap.exists) {
-      console.warn("onFeedbackCreated: user not found", ownerUserId);
-      return;
+    let notifyUid = null;
+    let notifySessionId = null;
+    let title = isOwnerReply ? "New reply" : "New feedback";
+    let body = "";
+    let clickLink = "/inbox";
+
+    // 1. Identify recipient and message body
+    if (isOwnerReply) {
+      // Owner is replying to a visitor (guest or logged-in)
+      notifyUid = feedback.targetUid || null;
+      notifySessionId = feedback.sessionId || null;
+      
+      const ownerSnap = await db.doc(`users/${feedback.submitterId}`).get();
+      const ownerName = ownerSnap.exists ? `@${ownerSnap.data()?.coolId || 'someone'}` : "The owner";
+      body = `${ownerName} replied: "${feedback.message || 'Sent an attachment'}"`;
+      const threadId = feedback.threadId || feedbackId;
+      clickLink = `/u/${ownerSnap.data()?.coolId || 'someone'}?thread=${threadId}`;
+    } else {
+      // Visitor is sending feedback to owner
+      notifyUid = feedback.recipientId;
+      const submitterName = feedback.submitterId ? "Someone" : "A guest";
+      body = `${submitterName} sent you feedback.`;
+      clickLink = feedback.imageId ? `/f?imageId=${feedback.imageId}` : "/inbox";
     }
-    const userData = userSnap.data();
-    coolId = userData?.coolId || coolId;
-    
-    // Get submitter's name if they are logged in
-    let submitterName = "Someone";
-    if (feedback.submitterId) {
-      const submitterSnap = await db.doc(`users/${feedback.submitterId}`).get();
-      if (submitterSnap.exists) {
-        submitterName = submitterSnap.data()?.coolId || "Someone";
-        if (submitterName !== "Someone") submitterName = "@" + submitterName;
-      }
+
+    if (!notifyUid && !notifySessionId) return;
+
+    // 2. Add to internal notifications collection (for permanent UI history)
+    if (notifyUid) {
+      await db.collection("notifications").add({
+        recipientId: notifyUid,
+        message: body,
+        isRead: false,
+        createdAt: FieldValue.serverTimestamp(),
+        type: isOwnerReply ? "owner_reply" : "anonymous_feedback",
+        feedbackId,
+        feedbackImageUrl: feedback.feedbackImageUrl || null,
+        feedbackMessage: feedback.message || null,
+        sessionId: feedback.sessionId || null,
+        threadId: feedback.threadId || feedbackId,
+      });
     }
 
-    const title = feedback.isOwnerReply ? "New reply" : "New feedback";
-    const body = feedback.isOwnerReply 
-      ? `${submitterName} sent you a message or feedback. Please login to check the message.`
-      : `${submitterName} sent you a message or feedback. Please login to check the message.`;
+    // 3. Find FCM Token
+    let fcmToken = null;
+    if (notifyUid) {
+      const userSnap = await db.doc(`users/${notifyUid}`).get();
+      fcmToken = userSnap.exists ? userSnap.data()?.fcmToken : null;
+    }
+    if (!fcmToken && notifySessionId) {
+      const sessionSnap = await db.doc(`sessions/${notifySessionId}`).get();
+      fcmToken = sessionSnap.exists ? sessionSnap.data()?.fcmToken : null;
+    }
 
-    // Determine who to notify
-    const notifyUid = (feedback.isOwnerReply && feedback.targetUid) ? feedback.targetUid : ownerUserId;
-
-    await db.collection("notifications").add({
-      recipientId: notifyUid,
-      message: body,
-      isRead: false,
-      createdAt: FieldValue.serverTimestamp(),
-      type: "anonymous_feedback",
-      imageId: imageIdForLink,
-      coolId,
-      feedbackImageUrl: feedback.feedbackImageUrl || null,
-      feedbackMessage: feedback.message || null,
-      feedbackId,
-      anonymousId: feedback.anonymousId || null,
-      submitterId: feedback.submitterId || null,
-      submitterIp: feedback.submitterIp || null,
-      sessionId: feedback.sessionId || null,
-    });
-
-    const fcmToken = userData?.fcmToken;
+    // 4. Send Push
     if (fcmToken) {
-      const clickLink = imageIdForLink ? `/f?imageId=${imageIdForLink}` : "/inbox";
       const message = {
         token: fcmToken,
         notification: { title, body },
         data: {
-          type: "feedback",
-          imageId: imageIdForLink || "",
+          type: isOwnerReply ? "reply" : "feedback",
           feedbackId: String(feedbackId),
           title,
           body,
@@ -185,9 +166,8 @@ exports.onFeedbackCreatedV2 = onDocumentCreated("feedbacks/{feedbackId}", async 
         },
         webpush: { fcmOptions: { link: clickLink } },
       };
-      const messaging = getMessaging();
-      await messaging.send(message);
-      console.log("Push sent to", notifyUid);
+      await getMessaging().send(message);
+      console.log(`Push sent to ${notifyUid || notifySessionId}`);
     }
   } catch (err) {
     console.error("Push notification failed:", err);
@@ -443,7 +423,8 @@ exports.submitFeedbackFromImgflip = onCall({ cors: CORS_ORIGINS }, async (reques
     const resolvedAnonymousId = anonymousId || getIpHash(ip);
     const visitorId = uid || resolvedAnonymousId;
 
-    await db.collection("feedbacks").add({
+    const threadId = request.data.threadId || require("crypto").randomUUID();
+    const feedbackData = {
       feedbackImageUrl,
       createdAt: new Date().toISOString(),
       submitterId: uid, 
@@ -451,10 +432,12 @@ exports.submitFeedbackFromImgflip = onCall({ cors: CORS_ORIGINS }, async (reques
       anonymousId: resolvedAnonymousId,
       visitorId,
       sessionId: sessionId || null,
+      threadId,
       deleted: false,
       recipientId,
-    });
-    return { success: true };
+    };
+    await db.collection("feedbacks").add(feedbackData);
+    return { success: true, threadId };
   } catch (err) {
     if (err && err.code) throw err;
     console.error("submitFeedbackFromImgflip error:", err);
@@ -468,9 +451,9 @@ exports.submitFeedbackFromImgflip = onCall({ cors: CORS_ORIGINS }, async (reques
  */
 exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
   try {
-    const { imageId, parentId, feedbackImageUrl, message, recipientId } = request.data || {};
-    if (!feedbackImageUrl && !message) {
-      throw new HttpsError("invalid-argument", "Either feedbackImageUrl or message is required");
+    const { imageId, parentId, feedbackImageUrl, message, recipientId, attachmentUrl, attachmentName } = request.data || {};
+    if (!feedbackImageUrl && !message && !attachmentUrl) {
+      throw new HttpsError("invalid-argument", "Either feedbackImageUrl, message or attachment is required");
     }
     if (feedbackImageUrl && (typeof feedbackImageUrl !== "string" || feedbackImageUrl.length > 2048)) {
       throw new HttpsError("invalid-argument", "Valid feedbackImageUrl is required");
@@ -478,6 +461,8 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
     if (message && (typeof message !== "string" || message.length > 2048)) {
       throw new HttpsError("invalid-argument", "Valid message is required");
     }
+
+    const uid = request.auth?.uid || null;
 
     const hasImage = !!imageId;
     const hasRecipient = !!recipientId;
@@ -492,15 +477,25 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
     const blockedSnap = await db.doc(`blockedIps/${ipKey}`).get();
     if (blockedSnap.exists) throw new HttpsError("permission-denied", "You cannot submit feedback. Your access has been restricted.");
 
+    let resolvedRecipientId = recipientId || null;
+
     if (hasImage) {
       const imageSnap = await db.doc(`images/${imageId}`).get();
       if (!imageSnap.exists) throw new HttpsError("not-found", "Image not found. The link may have expired.");
+      const imageData = imageSnap.data();
+      if (!resolvedRecipientId && imageData?.userId) {
+        resolvedRecipientId = imageData.userId;
+      }
     } else {
       const userSnap = await db.doc(`users/${recipientId}`).get();
       if (!userSnap.exists) throw new HttpsError("not-found", "User not found.");
     }
 
-    const visitorId = uid || anonymousId || getIpHash(ip);
+    if (!resolvedRecipientId) {
+      throw new HttpsError("invalid-argument", "Could not determine recipient.");
+    }
+
+    const visitorId = uid || anonymousId;
     const feedbackData = {
       createdAt: new Date().toISOString(),
       submitterId: uid,
@@ -508,11 +503,14 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
       anonymousId,
       visitorId, // NEW: Thread Identifier
       sessionId: request.data.sessionId || null,
+      threadId: request.data.threadId || require("crypto").randomUUID(),
       deleted: false,
-      recipientId: recipientId, // The profile owner
+      recipientId: resolvedRecipientId, // The profile owner
     };
     if (feedbackImageUrl) feedbackData.feedbackImageUrl = feedbackImageUrl;
     if (message) feedbackData.message = message;
+    if (attachmentUrl) feedbackData.attachmentUrl = attachmentUrl;
+    if (attachmentName) feedbackData.attachmentName = attachmentName;
     if (hasImage) {
       feedbackData.imageId = imageId;
       feedbackData.parentId = parentId || null;
@@ -529,7 +527,7 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
       }, { merge: true });
     }
 
-    return { success: true, anonymousId };
+    return { success: true, anonymousId, threadId: feedbackData.threadId };
   } catch (err) {
     if (err && err.code) throw err;
     console.error("submitFeedback error:", err);
@@ -543,7 +541,7 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
  */
 exports.getAnonymousChatHistory = onCall({ cors: CORS_ORIGINS }, async (request) => {
   try {
-    const { recipientId, sessionId } = request.data || {};
+    const { recipientId, sessionId, threadId } = request.data || {};
     if (!recipientId || typeof recipientId !== "string") {
       throw new HttpsError("invalid-argument", "recipientId is required");
     }
@@ -552,12 +550,20 @@ exports.getAnonymousChatHistory = onCall({ cors: CORS_ORIGINS }, async (request)
     const anonymousId = getIpHash(ip);
     const db = getFirestore();
 
-    // Query 1: By current IP-based anonymousId
-    const snapIp = await db.collection("feedbacks")
-      .where("recipientId", "==", recipientId)
-      .where("anonymousId", "==", anonymousId)
-      .limit(100)
-      .get();
+    // If threadId is provided, we only want THAT thread's history
+    if (threadId) {
+      const snap = await db.collection("feedbacks")
+        .where("threadId", "==", threadId)
+        .limit(200)
+        .get();
+      
+      const items = snap.docs
+        .filter(d => d.data().deleted !== true)
+        .map(d => ({ id: d.id, ...d.data() }))
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+      
+      return { success: true, anonymousId, items };
+    }
 
     let finalItems = snapIp.docs
       .filter(d => d.data().deleted !== true)
@@ -653,15 +659,18 @@ exports.mapIpToUser = onCall({ cors: CORS_ORIGINS }, async (request) => {
 
 exports.submitOwnerReply = onCall({ cors: CORS_ORIGINS }, async (request) => {
   try {
-    const { message, anonymousId, targetUid, sessionId } = request.data || {};
+    const { message, anonymousId, targetUid, sessionId, feedbackImageUrl, attachmentUrl, attachmentName, threadId } = request.data || {};
     const targetUidClean = (targetUid && typeof targetUid === "string") ? targetUid.trim() : null;
     const anonymousIdClean = (anonymousId && typeof anonymousId === "string") ? anonymousId.trim() : null;
 
-    if (!message || typeof message !== "string" || !message.trim()) {
-      throw new HttpsError("invalid-argument", "Valid message is required");
+    if (!attachmentUrl && !feedbackImageUrl && (!message || typeof message !== "string" || !message.trim())) {
+      throw new HttpsError("invalid-argument", "Valid message, image, or attachment is required");
     }
     if (!anonymousIdClean && !targetUidClean) {
       throw new HttpsError("invalid-argument", "Either anonymousId or targetUid is required");
+    }
+    if (!threadId) {
+      throw new HttpsError("invalid-argument", "threadId is required for replies");
     }
     if (!request.auth || !request.auth.uid) {
       throw new HttpsError("unauthenticated", "You must be logged in to reply");
@@ -672,7 +681,7 @@ exports.submitOwnerReply = onCall({ cors: CORS_ORIGINS }, async (request) => {
     const visitorId = targetUidClean || anonymousIdClean || getIpHash(ip);
 
     const replyData = {
-      message: message.trim(),
+      message: message ? message.trim() : "",
       createdAt: new Date().toISOString(),
       submitterId: request.auth.uid,
       submitterIp: ip,
@@ -680,9 +689,13 @@ exports.submitOwnerReply = onCall({ cors: CORS_ORIGINS }, async (request) => {
       visitorId, 
       sessionId: sessionId || null, 
       targetUid: targetUidClean,
+      threadId: threadId,
       recipientId: targetUidClean || request.auth.uid, 
       isOwnerReply: true,
       deleted: false,
+      feedbackImageUrl: feedbackImageUrl || null,
+      attachmentUrl: attachmentUrl || null,
+      attachmentName: attachmentName || null,
     };
 
     await db.collection("feedbacks").add(replyData);

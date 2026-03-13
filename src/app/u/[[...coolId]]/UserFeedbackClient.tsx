@@ -2,19 +2,21 @@
 
 import { useEffect, useState, useRef, Suspense, useCallback } from "react";
 import Link from "next/link";
-import { Camera, X, Heart, Send, ChevronLeft, ImageIcon } from "lucide-react";
+import { Camera, X, Heart, Send, ChevronLeft, ImageIcon, Paperclip, FileText, Bell, Link as LinkIcon, ShieldCheck, Share2 } from "lucide-react";
 import { usePathname, useSearchParams } from "next/navigation";
 import { doc, getDoc, addDoc, collection, query, where, orderBy, limit, onSnapshot } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { db, ensureFirestoreNetwork } from "@/lib/firebase";
 import { getAppFunctions } from "@/lib/functions";
-import { uploadFeedbackImage } from "@/lib/image-upload";
+import { uploadFeedbackImage, uploadAttachment } from "@/lib/image-upload";
 import { useToast } from "@/lib/toast-context";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { AiImagePrompts, openProvider, type AiImageProvider } from "@/components/AiImagePrompts";
 import { ExploreImages } from "@/components/ExploreImages";
 import { getErrorMessage } from "@/lib/error-utils";
+
+import { requestNotificationPermission, getIosPushHint } from "@/lib/notifications";
 
 const SIGN_IN_NUDGE_INTERVAL_MS = 20_000;
 
@@ -74,9 +76,27 @@ function UserFeedbackContent() {
   const [showGuestSuccessModal, setShowGuestSuccessModal] = useState(false);
   const [chatMode, setChatMode] = useState(false);
   const [recentChats, setRecentChats] = useState<RecentChat[]>([]);
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
+  const [notifStatus, setNotifStatus] = useState<"idle" | "loading" | "enabled" | "denied" | "unsupported">("idle");
   const toast = useToast();
+
+  useEffect(() => {
+    const sid = searchParams.get("sid");
+    if (sid && typeof window !== "undefined") {
+      localStorage.setItem("picpop_session_id", sid);
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setNotifStatus(Notification.permission === "granted" ? "enabled" : Notification.permission === "denied" ? "denied" : "idle");
+    } else {
+      setNotifStatus("unsupported");
+    }
+  }, []);
 
   useEffect(() => {
     setRecentChats(getRecentChats());
@@ -93,6 +113,10 @@ function UserFeedbackContent() {
       chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [chatHistory, chatMode]);
+
+  const hasOwnerReply = chatHistory.some(m => m.isOwnerReply);
+  const isGuest = !authUser;
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Track visit
   useEffect(() => {
@@ -163,10 +187,11 @@ function UserFeedbackContent() {
         const fns = getAppFunctions();
         if (!fns || !db) return;
         const sessionId = getSessionId();
-        const getHistory = httpsCallable<{ recipientId: string; sessionId: string | null }, { anonymousId: string; items: any[] }>(
+        const threadParam = searchParams.get("thread");
+        const getHistory = httpsCallable<{ recipientId: string; sessionId: string | null; threadId?: string | null }, { anonymousId: string; items: any[] }>(
           fns, "getAnonymousChatHistory"
         );
-        const result = await getHistory({ recipientId: userId, sessionId });
+        const result = await getHistory({ recipientId: userId, sessionId, threadId: threadParam });
         if (cancelled) return;
 
         const anonId = result.data.anonymousId;
@@ -174,7 +199,8 @@ function UserFeedbackContent() {
 
         if (result.data.items.length > 0) {
           setChatHistory(result.data.items);
-          if (authUser) setChatMode(true);
+          const hasReply = result.data.items.some((i: any) => i.isOwnerReply);
+          if (hasReply) setChatMode(true);
           saveRecentChat(coolId, userId);
         }
 
@@ -184,41 +210,42 @@ function UserFeedbackContent() {
         const qVisitorThread = query(
           collection(db, "feedbacks"),
           where("recipientId", "==", userId),
-          where("visitorId", "==", anonId),
+          where(threadParam ? "threadId" : "visitorId", "==", threadParam || anonId),
           limit(100)
         );
-        
+
         // 2. Listen for session-specific targeted replies (for shared IPs)
         const qSessionThread = query(
           collection(db, "feedbacks"),
           where("recipientId", "==", userId),
-          where("sessionId", "==", currentSessionId),
+          where(threadParam ? "threadId" : "sessionId", "==", threadParam || currentSessionId),
           limit(50)
         );
 
         const processSnap = (snap: any) => {
-            const newItems = snap.docs
-                .filter((d: any) => d.data().deleted !== true)
-                .map((d: any) => ({ id: d.id, ...d.data() } as any));
-            
-            setChatHistory(prev => {
-                const map = new Map(prev.map(i => [i.id, i]));
-                let changed = false;
-                for (const item of newItems) {
-                    const existing = map.get(item.id);
-                    if (!existing || JSON.stringify(existing) !== JSON.stringify(item)) {
-                        map.set(item.id, item);
-                        changed = true;
-                    }
-                }
-                if (!changed) return prev;
-                return Array.from(map.values()).sort((a,b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-            });
-            
-            if (newItems.length > 0) {
-                if (authUser) setChatMode(true);
-                saveRecentChat(coolId, userId);
+          const newItems = snap.docs
+            .filter((d: any) => d.data().deleted !== true)
+            .map((d: any) => ({ id: d.id, ...d.data() } as any));
+
+          setChatHistory(prev => {
+            const map = new Map(prev.map(i => [i.id, i]));
+            let changed = false;
+            for (const item of newItems) {
+              const existing = map.get(item.id);
+              if (!existing || JSON.stringify(existing) !== JSON.stringify(item)) {
+                map.set(item.id, item);
+                changed = true;
+              }
             }
+            if (!changed) return prev;
+            return Array.from(map.values()).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          });
+
+          if (newItems.length > 0) {
+            const hasReply = newItems.some((i: any) => i.isOwnerReply);
+            if (hasReply) setChatMode(true);
+            saveRecentChat(coolId, userId);
+          }
         };
 
         let unSubs: (() => void)[] = [
@@ -259,44 +286,84 @@ function UserFeedbackContent() {
   }, [userId, coolId, authUser?.uid]);
 
   const sendTextMessage = useCallback(async (msg: string) => {
-    if (!userId || !msg.trim()) return;
+    if (!userId || (!msg.trim() && !pendingFile)) return;
     const text = msg.trim();
+    const fileToUpload = pendingFile;
     setTextMessage("");
-    
+    setPendingFile(null);
+
+    const threadId = chatMode ? (chatHistory[chatHistory.length - 1]?.threadId || chatHistory[chatHistory.length - 1]?.id) : null;
+
     // OPTIMISTIC UPDATE: Add to UI immediately for speed feel
     const optimisticId = "opt_" + Math.random().toString(36).substring(2, 9);
+    const urlToUse = fileToUpload ? URL.createObjectURL(fileToUpload) : "";
     const optimisticMsg = {
       id: optimisticId,
       message: text,
       createdAt: new Date().toISOString(),
       anonymousId: myChatAnonId,
       isOwnerReply: false,
+      attachmentUrl: urlToUse || undefined,
+      attachmentName: fileToUpload?.name || undefined,
+      threadId: threadId || undefined,
     };
     setChatHistory(prev => [...prev, optimisticMsg]);
     checkChatModeOrSuccess();
 
     try {
+      let attachmentUrl = null;
+      let attachmentName = null;
+
+      if (fileToUpload) {
+        setSubmitting(true);
+        const fileId = "att_" + Math.random().toString(36).substring(2, 9);
+        attachmentUrl = await uploadAttachment(fileToUpload, fileId);
+        attachmentName = fileToUpload.name;
+      }
+
       const fns = getAppFunctions();
       if (!fns) throw new Error("Firebase not configured");
       const sessionId = getSessionId();
-      const submitFeedback = httpsCallable<{ recipientId: string; message: string; sessionId: string | null }, { success: boolean; anonymousId?: string }>(
+
+      const submitFeedback = httpsCallable<{
+        recipientId: string;
+        message: string;
+        sessionId: string | null;
+        attachmentUrl?: string | null;
+        attachmentName?: string | null;
+        threadId?: string | null;
+      }, { success: boolean; anonymousId?: string }>(
         fns, "submitFeedback"
       );
-      const result = await submitFeedback({ recipientId: userId, message: text, sessionId });
+      const result = await submitFeedback({
+        recipientId: userId,
+        message: text,
+        sessionId,
+        attachmentUrl,
+        attachmentName,
+        threadId: threadId
+      }) as any;
       if (result.data.anonymousId && !myChatAnonId) setMyChatAnonId(result.data.anonymousId);
+      if (result.data.threadId && !searchParams.get("thread")) {
+        window.history.replaceState(null, "", `${window.location.pathname}?thread=${result.data.threadId}`);
+      }
       saveRecentChat(coolId, userId);
 
       // Cleanup optimist after successful sync
       setTimeout(() => {
         setChatHistory(prev => prev.filter(m => m.id !== optimisticId));
+        if (urlToUse) URL.revokeObjectURL(urlToUse);
       }, 4000);
     } catch (err: unknown) {
       // Rollback optimistic update on error
       setChatHistory(prev => prev.filter(m => m.id !== optimisticId));
       setTextMessage(text); // Restore text
+      if (fileToUpload) setPendingFile(fileToUpload);
       toast.error(getErrorMessage(err));
+    } finally {
+      setSubmitting(false);
     }
-  }, [userId, myChatAnonId, toast, coolId]);
+  }, [userId, myChatAnonId, toast, coolId, pendingFile]);
 
   const doFileUpload = async (file: File) => {
     if (!userId || !db) return;
@@ -304,7 +371,8 @@ function UserFeedbackContent() {
     try {
       await ensureFirestoreNetwork();
       const feedbackId = crypto.randomUUID();
-      
+
+      const threadId = chatMode ? (chatHistory[chatHistory.length - 1]?.threadId || chatHistory[chatHistory.length - 1]?.id) : null;
       let optimisticId = "";
       if (authUser) {
         optimisticId = "opt_" + Math.random().toString(36).substring(2, 9);
@@ -315,7 +383,8 @@ function UserFeedbackContent() {
           createdAt: new Date().toISOString(),
           anonymousId: myChatAnonId,
           isOwnerReply: false,
-          submitterId: authUser.uid
+          submitterId: authUser.uid,
+          threadId: threadId || undefined
         }]);
       }
 
@@ -323,15 +392,18 @@ function UserFeedbackContent() {
       const fns = getAppFunctions();
       if (!fns) throw new Error("Firebase not configured");
       const sessionId = getSessionId();
-      const submitFeedback = httpsCallable<{ recipientId: string; feedbackImageUrl: string; sessionId: string | null }, { success: boolean; anonymousId?: string }>(
+      const submitFeedback = httpsCallable<{ recipientId: string; feedbackImageUrl: string; sessionId: string | null; threadId?: string | null }, { success: boolean; anonymousId?: string }>(
         fns, "submitFeedback"
       );
-      const result = await submitFeedback({ recipientId: userId, feedbackImageUrl: url, sessionId });
-      
+      const result = await submitFeedback({ recipientId: userId, feedbackImageUrl: url, sessionId, threadId: threadId }) as any;
+
       if (authUser && optimisticId) {
         setTimeout(() => setChatHistory(prev => prev.filter(m => m.id !== optimisticId)), 4000);
       }
       if (result.data.anonymousId && !myChatAnonId) setMyChatAnonId(result.data.anonymousId);
+      if (result.data.threadId && !searchParams.get("thread")) {
+        window.history.replaceState(null, "", `${window.location.pathname}?thread=${result.data.threadId}`);
+      }
       saveRecentChat(coolId, userId);
       checkChatModeOrSuccess();
     } catch (err: unknown) {
@@ -359,12 +431,23 @@ function UserFeedbackContent() {
     });
   };
 
+  const handleShare = (msg?: string, url?: string) => {
+    const shareUrl = url || window.location.href;
+    const shareText = msg || `Check out this feedback on PicPop!`;
+    if (typeof navigator !== "undefined" && navigator.share) {
+      navigator.share({ title: "PicPop", text: shareText, url: shareUrl }).catch(() => { });
+    } else {
+      navigator.clipboard.writeText(`${shareText} ${shareUrl}`);
+      toast.success("Link copied to clipboard!");
+    }
+  };
+
   const handleSharedSelect = async (item: { id: string; feedbackImageUrl: string }) => {
     if (!userId || !db) return;
     setSubmitting(true);
     try {
       await ensureFirestoreNetwork();
-
+      const threadId = chatMode ? (chatHistory[chatHistory.length - 1]?.threadId || chatHistory[chatHistory.length - 1]?.id) : null;
       let optimisticId = "";
       if (authUser) {
         optimisticId = "opt_" + Math.random().toString(36).substring(2, 9);
@@ -374,20 +457,20 @@ function UserFeedbackContent() {
           createdAt: new Date().toISOString(),
           anonymousId: myChatAnonId,
           isOwnerReply: false,
-          submitterId: authUser.uid
+          submitterId: authUser.uid,
+          threadId: threadId || undefined
         }]);
       }
 
       const fns = getAppFunctions();
       if (!fns) throw new Error("Firebase not configured");
       const sessionId = getSessionId();
-      const submit = httpsCallable<{ recipientId: string; feedbackImageUrl: string; sessionId: string | null }, { success: boolean; anonymousId?: string }>(fns, "submitFeedback");
-      const result = await submit({ recipientId: userId, feedbackImageUrl: item.feedbackImageUrl, sessionId });
-      
-      if (authUser && optimisticId) {
-        setTimeout(() => setChatHistory(prev => prev.filter(m => m.id !== optimisticId)), 4000);
-      }
+      const submit = httpsCallable<{ recipientId: string; feedbackImageUrl: string; sessionId: string | null; threadId?: string | null }, { success: boolean; anonymousId?: string }>(fns, "submitFeedback");
+      const result = await submit({ recipientId: userId, feedbackImageUrl: item.feedbackImageUrl, sessionId, threadId: threadId }) as any;
       if (result.data.anonymousId && !myChatAnonId) setMyChatAnonId(result.data.anonymousId);
+      if (result.data.threadId && !searchParams.get("thread")) {
+        window.history.replaceState(null, "", `${window.location.pathname}?thread=${result.data.threadId}`);
+      }
       saveRecentChat(coolId, userId);
       checkChatModeOrSuccess();
     } catch (err: unknown) {
@@ -401,7 +484,7 @@ function UserFeedbackContent() {
     setSubmitting(true);
     try {
       await ensureFirestoreNetwork();
-
+      const threadId = chatMode ? (chatHistory[chatHistory.length - 1]?.threadId || chatHistory[chatHistory.length - 1]?.id) : null;
       let optimisticId = "";
       if (authUser) {
         optimisticId = "opt_" + Math.random().toString(36).substring(2, 9);
@@ -411,20 +494,20 @@ function UserFeedbackContent() {
           createdAt: new Date().toISOString(),
           anonymousId: myChatAnonId,
           isOwnerReply: false,
-          submitterId: authUser.uid
+          submitterId: authUser.uid,
+          threadId: threadId || undefined
         }]);
       }
 
       const fns = getAppFunctions();
       if (!fns) throw new Error("Firebase not configured");
       const sessionId = getSessionId();
-      const submit = httpsCallable<{ imageUrl: string; recipientId: string; sessionId: string | null }, { success: boolean; anonymousId?: string }>(fns, "submitFeedbackFromImgflip");
-      const result = await submit({ imageUrl: meme.url, recipientId: userId, sessionId });
-      
-      if (authUser && optimisticId) {
-        setTimeout(() => setChatHistory(prev => prev.filter(m => m.id !== optimisticId)), 4000);
-      }
+      const submit = httpsCallable<{ imageUrl: string; recipientId: string; sessionId: string | null; threadId?: string | null }, { success: boolean; anonymousId?: string }>(fns, "submitFeedbackFromImgflip");
+      const result = await submit({ imageUrl: meme.url, recipientId: userId, sessionId, threadId: threadId }) as any;
       if (result.data.anonymousId && !myChatAnonId) setMyChatAnonId(result.data.anonymousId);
+      if (result.data.threadId && !searchParams.get("thread")) {
+        window.history.replaceState(null, "", `${window.location.pathname}?thread=${result.data.threadId}`);
+      }
       saveRecentChat(coolId, userId);
       checkChatModeOrSuccess();
     } catch (err: unknown) {
@@ -436,6 +519,42 @@ function UserFeedbackContent() {
   const showShareConfirm = (previewUrl: string, confirm: () => Promise<void>) => setPendingShare({ previewUrl, confirm });
   const handleSharedSelectWithConfirm = async (item: { id: string; feedbackImageUrl: string }) => {
     showShareConfirm(item.feedbackImageUrl, () => { setPendingShare(null); return handleSharedSelect(item); });
+  };
+
+  const handleGetMagicLink = () => {
+    const sid = getSessionId();
+    if (!sid) return;
+    const url = `${window.location.origin}${pathname}?sid=${sid}`;
+    navigator.clipboard.writeText(url).then(() => {
+      toast.success("Magic link copied! Save this to return to this chat later.");
+    });
+  };
+
+  const handleEnablePushNotifications = async () => {
+    const iosHint = getIosPushHint();
+    if (iosHint) {
+      toast.error(iosHint);
+      return;
+    }
+    setNotifStatus("loading");
+    try {
+      const token = await requestNotificationPermission();
+      if (token) {
+        const { saveFcmToken } = await import("@/lib/notifications");
+        const sid = getSessionId();
+        await saveFcmToken(authUser?.uid || null, token, sid);
+        setNotifStatus("enabled");
+        toast.success("Notifications enabled!");
+      } else {
+        setNotifStatus(Notification.permission === "denied" ? "denied" : "idle");
+        if (Notification.permission === "denied") {
+          toast.error("Notifications blocked. Please enable them in your browser settings.");
+        }
+      }
+    } catch (err) {
+      setNotifStatus("idle");
+      toast.error("Failed to enable notifications.");
+    }
   };
 
   const openAiImageWithPrompt = (prompt: string, provider: AiImageProvider) => {
@@ -496,7 +615,7 @@ function UserFeedbackContent() {
               </p>
             </div>
           </div>
-          
+
           <div className="flex items-center gap-3">
             <div className="flex flex-col items-end mr-1 hidden sm:flex">
               <span className="text-[10px] font-black text-[var(--green)]">LIVE</span>
@@ -519,52 +638,116 @@ function UserFeedbackContent() {
           )}
           {chatHistory
             .filter(item => {
-               // Client-side security filter
-               if (item.targetUid && item.targetUid !== authUser?.uid && item.submitterId !== authUser?.uid) return false;
-               return true;
+              // Client-side security filter
+              if (item.targetUid && item.targetUid !== authUser?.uid && item.submitterId !== authUser?.uid) return false;
+              return true;
             })
             .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
             .map((msg, idx) => {
-            const isOwner = msg.isOwnerReply;
-            const isMe = msg.submitterId === authUser?.uid || (authUser?.uid !== userId && !msg.isOwnerReply && !msg.submitterId); 
-            return (
-              <div key={msg.id || idx} className={`flex flex-col gap-0.5 msg-in ${isMe ? "items-end" : "items-start"}`}>
-                <div className={`flex items-end gap-2 max-w-[78%] ${isMe ? "flex-row-reverse" : ""}`}>
-                  {/* Avatar */}
-                  <div className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-black text-white ${isMe
-                    ? "bg-gradient-to-br from-pink-500 to-purple-600"
-                    : "bg-gradient-to-br from-blue-500 to-purple-500"
-                  }`}>
-                    {isMe 
-                      ? "You"
-                      : (msg.isOwnerReply ? coolId[0]?.toUpperCase() : (msg.submitterId ? "V" : "U"))}
+              const isOwner = msg.isOwnerReply;
+              const isMe = msg.submitterId === authUser?.uid || (authUser?.uid !== userId && !msg.isOwnerReply && !msg.submitterId);
+
+              // GATE LOGIC: If guest and this is an owner reply, show the FIRST one as a preview, then gate
+              const isGuest = !authUser;
+              const isFirstOwnerReply = isOwner && !chatHistory.slice(0, idx).some(m => m.isOwnerReply);
+              const isGated = isGuest && isOwner && !isFirstOwnerReply;
+
+              if (isGated) return null;
+
+              return (
+                <div key={msg.id || idx} className={`flex flex-col gap-0.5 msg-in ${isMe ? "items-end" : "items-start"}`}>
+                  <div className={`flex items-end gap-2 max-w-[78%] ${isMe ? "flex-row-reverse" : ""}`}>
+                    {/* Avatar */}
+                    <div className={`w-7 h-7 rounded-full shrink-0 flex items-center justify-center text-[10px] font-black text-white ${isMe
+                      ? "bg-gradient-to-br from-pink-500 to-purple-600"
+                      : "bg-gradient-to-br from-blue-500 to-purple-500"
+                      }`}>
+                      {isMe
+                        ? "You"
+                        : (msg.isOwnerReply ? coolId[0]?.toUpperCase() : (msg.submitterId ? "V" : "U"))}
+                    </div>
+                    {/* Bubble */}
+                    <div className={`rounded-2xl px-4 py-3 shadow-xl ${isMe
+                      ? "rounded-br-sm text-white"
+                      : "rounded-bl-sm border border-white/10"
+                      }`}
+                      style={isMe
+                        ? { background: "linear-gradient(135deg, var(--pink), var(--purple))", boxShadow: "0 8px 30px -8px rgba(255,61,127,0.5)" }
+                        : { background: "rgba(255,255,255,0.03)", backdropFilter: "blur(12px)" }}>
+                      {msg.feedbackImageUrl && (
+                        <div className="relative group/img">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={msg.feedbackImageUrl} alt="image" className="rounded-xl max-w-[240px] w-full object-contain mb-1" />
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleShare(msg.message, msg.feedbackImageUrl);
+                            }}
+                            className="absolute top-2 right-2 p-2 rounded-xl bg-black/60 backdrop-blur-md border border-white/20 text-white opacity-0 group-hover/img:opacity-100 transition-all hover:bg-[var(--pink)] active:scale-95 flex items-center gap-1.5 shadow-xl"
+                          >
+                            <Share2 className="w-3.5 h-3.5" />
+                            <span className="text-[10px] font-black uppercase tracking-widest leading-none">Share to Story</span>
+                          </button>
+                        </div>
+                      )}
+                      {msg.attachmentUrl && (
+                        <div className="mb-2">
+                          {msg.attachmentUrl.match(/\.(jpeg|jpg|gif|png|webp)/i) ? (
+                            <a href={msg.attachmentUrl} target="_blank" rel="noopener noreferrer">
+                              <img src={msg.attachmentUrl} alt="attachment" className="rounded-xl max-w-[200px] w-full object-contain bg-black/20" />
+                            </a>
+                          ) : (
+                            <a
+                              href={msg.attachmentUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-colors"
+                            >
+                              <FileText className="w-5 h-5 text-[var(--blue)]" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-[10px] font-bold text-white truncate">{msg.attachmentName || 'Document'}</p>
+                                <p className="text-[8px] text-[var(--text-muted)] uppercase tracking-widest font-black">View Document</p>
+                              </div>
+                            </a>
+                          )}
+                        </div>
+                      )}
+                      {msg.message && (
+                        <div className="flex flex-col gap-0.5">
+                          {isMe && msg.submitterId && (
+                            <span className="text-[7px] font-black text-white/60 uppercase tracking-tighter">Verified</span>
+                          )}
+                          <p className="text-sm font-semibold whitespace-pre-wrap leading-relaxed">{msg.message}</p>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {/* Bubble */}
-                  <div className={`rounded-2xl px-4 py-2.5 ${isMe
-                    ? "rounded-br-sm text-white"
-                    : "rounded-bl-sm border border-[var(--border)]"
-                  }`}
-                    style={isMe ? { background: "linear-gradient(135deg, var(--pink), var(--purple))" } : { background: "var(--bg-card)" }}>
-                    {msg.feedbackImageUrl && (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={msg.feedbackImageUrl} alt="image" className="rounded-xl max-w-[240px] w-full object-contain mb-1" />
-                    )}
-                    {msg.message && (
-                      <div className="flex flex-col gap-0.5">
-                        {isMe && msg.submitterId && (
-                           <span className="text-[7px] font-black text-white/60 uppercase tracking-tighter">Verified</span>
-                        )}
-                        <p className="text-sm font-semibold whitespace-pre-wrap leading-relaxed">{msg.message}</p>
+                  <span className={`text-[10px] text-[var(--text-muted)] ${isMe ? "mr-9" : "ml-9"}`}>
+                    {formatTime(msg.createdAt)}
+                  </span>
+
+                  {isOwner && isFirstOwnerReply && isGuest && chatHistory.length > idx + 1 && (
+                    <div className="w-full mt-8 mb-4 flex flex-col items-center gap-5 py-8 px-6 rounded-[32px] bg-white/[0.03] border border-white/10 backdrop-blur-2xl relative overflow-hidden text-center shadow-2xl">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--pink)]/10 blur-[80px] rounded-full" />
+                      <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-pink-500 to-purple-600 flex items-center justify-center shadow-[0_8px_32px_rgba(255,61,127,0.3)] rotate-3">
+                        <Send className="w-6 h-6 text-white -rotate-12" />
                       </div>
-                    )}
-                  </div>
+                      <div>
+                        <p className="font-black text-xl text-white tracking-tight">They replied!</p>
+                        <p className="text-sm text-white/50 font-bold mt-1">Reply anonymously to continue the conversation</p>
+                      </div>
+                      <Link
+                        href="/login"
+                        className="w-full py-4 rounded-2xl font-black text-white text-center shadow-xl hover:scale-[1.02] transition-all hover:brightness-110 active:scale-95 flex items-center justify-center gap-2"
+                        style={{ background: "linear-gradient(135deg, var(--pink), var(--purple))" }}
+                      >
+                        Continue with Google
+                      </Link>
+                    </div>
+                  )}
                 </div>
-                <span className={`text-[10px] text-[var(--text-muted)] ${isMe ? "mr-9" : "ml-9"}`}>
-                  {formatTime(msg.createdAt)}
-                </span>
-              </div>
-            );
-          })}
+              );
+            })}
           <div ref={chatEndRef} />
         </div>
 
@@ -599,40 +782,57 @@ function UserFeedbackContent() {
           <div className="flex items-end gap-2 max-w-2xl mx-auto">
             {/* Camera button */}
             <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageSelect} className="hidden" />
-            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={submitting}
-              className="p-2.5 rounded-full shrink-0 text-[var(--text-muted)] hover:text-[var(--pink)] hover:bg-white/5 transition-colors">
+            <button type="button" onClick={() => fileInputRef.current?.click()} disabled={submitting || (isGuest && !hasOwnerReply)}
+              className="p-2.5 rounded-full shrink-0 text-[var(--text-muted)] hover:text-[var(--pink)] hover:bg-white/5 transition-colors disabled:opacity-40">
               <Camera className="w-5 h-5" />
             </button>
 
-            {/* Text input - ONLY for logged in users */}
-            {authUser ? (
-              <>
-                <textarea
-                  value={textMessage}
-                  onChange={(e) => setTextMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTextMessage(textMessage); }
-                  }}
-                  placeholder="Type a message..."
-                  rows={1}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-2xl px-4 py-2.5 text-sm resize-none focus:outline-none focus:border-[var(--pink)] transition-colors"
-                  style={{ maxHeight: "120px", minHeight: "42px" }}
-                />
-                <button type="button"
-                  onClick={() => sendTextMessage(textMessage)}
-                  disabled={!textMessage.trim() || submitting}
-                  className="p-2.5 rounded-full shrink-0 text-white disabled:opacity-40 transition-all hover:scale-105"
-                  style={{ background: "linear-gradient(135deg, var(--pink), var(--purple))" }}>
-                  <Send className="w-4 h-4" />
-                </button>
-              </>
-            ) : (
-              <div className="flex-1 flex items-center">
-                 <Link href="/login" className="flex-1 py-2.5 px-4 rounded-xl font-bold text-center text-[10px] bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-[var(--text-muted)] uppercase tracking-widest">
-                   Sign in to start chatting & see replies
-                 </Link>
-              </div>
-            )}
+            {/* Text input box */}
+            <div className="flex-1 flex flex-col gap-2">
+              {isGuest && !hasOwnerReply ? (
+                <div className="flex-1 py-3 px-4 rounded-2xl bg-white/5 border border-white/10 text-[10px] font-black uppercase tracking-widest text-[var(--text-muted)] text-center">
+                  Waiting for @{coolId} to reply...
+                </div>
+              ) : isGuest && hasOwnerReply ? (
+                <Link href="/login" className="flex-1 py-3 px-4 rounded-2xl font-black text-center text-[10px] bg-white/5 border border-white/10 hover:bg-white/10 transition-all text-[var(--text-muted)] uppercase tracking-widest flex items-center justify-center gap-2 group">
+                  Sign in to check the reply & continue <Heart className="w-3 h-3 text-[var(--pink)] group-hover:scale-125 transition-transform" />
+                </Link>
+              ) : (
+                <>
+                  {authUser && (
+                    <div className="flex items-end gap-2">
+                       <input ref={docInputRef} type="file" onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (file) setPendingFile(file);
+                      }} className="hidden" />
+                      <button type="button" onClick={() => docInputRef.current?.click()} disabled={submitting}
+                        className="p-2.5 rounded-full shrink-0 text-[var(--text-muted)] hover:text-[var(--pink)] hover:bg-white/5 transition-colors">
+                        <Paperclip className="w-5 h-5" />
+                      </button>
+                      
+                      <textarea
+                        value={textMessage}
+                        onChange={(e) => setTextMessage(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendTextMessage(textMessage); }
+                        }}
+                        placeholder="Type a message..."
+                        rows={1}
+                        className="flex-1 bg-white/[0.03] border border-white/10 rounded-2xl px-4 py-3 text-sm resize-none focus:outline-none focus:border-[var(--pink)]/50 transition-all placeholder:text-white/20"
+                        style={{ maxHeight: "120px", minHeight: "46px" }}
+                      />
+                      <button type="button"
+                        onClick={() => sendTextMessage(textMessage)}
+                        disabled={(!textMessage.trim() && !pendingFile) || submitting}
+                        className="p-2.5 rounded-full shrink-0 text-white disabled:opacity-40 transition-all hover:scale-105"
+                        style={{ background: "linear-gradient(135deg, var(--pink), var(--purple))" }}>
+                        <Send className="w-4 h-4" />
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -678,6 +878,18 @@ function UserFeedbackContent() {
             <img src="/logo.svg" alt="picpop" className="h-6 sm:h-7 w-auto hover:scale-105 transition-transform duration-300" />
           </Link>
           <div className="flex items-center gap-2">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setChatMode(true)}
+                className="p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all group"
+              >
+                <Bell className="w-5 h-5 text-[var(--text-muted)] group-hover:text-[var(--pink)]" />
+                {hasOwnerReply && (
+                  <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-[var(--pink)] rounded-full animate-pulse shadow-[0_0_8px_var(--pink)]" />
+                )}
+              </button>
+            </div>
             <ThemeToggle />
             {authUser ? (
               <Link href="/dashboard" className="text-sm font-bold text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors">Dashboard</Link>
@@ -809,27 +1021,7 @@ function UserFeedbackContent() {
           </button>
         </div>
 
-        {/* Text message form */}
-        <div className="mt-6 mb-8">
-          <div className="p-[2px] rounded-3xl" style={{ background: "linear-gradient(135deg, rgba(255,255,255,0.1), rgba(255,255,255,0.02))" }}>
-            <form onSubmit={(e) => { e.preventDefault(); sendTextMessage(textMessage); }}
-              className="rounded-[22px] p-5 flex gap-3 items-end" style={{ background: "var(--bg-card)" }}>
-              <textarea
-                className="flex-1 bg-black/20 text-white rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-[var(--pink)] placeholder:text-white/30 resize-none text-sm"
-                style={{ minHeight: "80px" }}
-                placeholder="Or type an anonymous message..."
-                value={textMessage}
-                onChange={(e) => setTextMessage(e.target.value)}
-                disabled={submitting}
-              />
-              <button type="submit" disabled={submitting || !textMessage.trim()}
-                className="p-3 rounded-2xl text-white disabled:opacity-40 shrink-0"
-                style={{ background: "linear-gradient(135deg, var(--green), var(--blue))" }}>
-                <Send className="w-5 h-5" />
-              </button>
-            </form>
-          </div>
-        </div>
+
 
         <ExploreImages onSubmitShared={handleSharedSelectWithConfirm} disabled={submitting} />
         <AiImagePrompts onPromptClick={openAiImageWithPrompt} onPromptCopy={() => toast.success("Copied! Choose a provider to generate.")} />
@@ -840,64 +1032,106 @@ function UserFeedbackContent() {
 
         {/* Guest Success Modal */}
         {showGuestSuccessModal && (
-          <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-6 animate-in fade-in duration-300">
-            <div className="bg-[#151515] rounded-3xl p-8 w-full max-w-sm flex flex-col items-center text-center shadow-2xl relative overflow-hidden" 
-                 style={{ border: "1px solid rgba(255,255,255,0.1)", boxShadow: "0 25px 50px -12px rgba(255, 61, 127, 0.25)" }}>
-              {/* Background glow */}
-              <div className="absolute top-0 right-0 w-32 h-32 bg-[var(--pink)]/20 rounded-full blur-3xl" />
-              <div className="absolute bottom-0 left-0 w-32 h-32 bg-[var(--purple)]/20 rounded-full blur-3xl" />
-
-              <div className="w-20 h-20 rounded-full flex items-center justify-center mb-6 z-10" 
-                   style={{ background: "linear-gradient(135deg, rgba(0,255,148,0.2) 0%, rgba(0,200,255,0.2) 100%)", border: "2px solid rgba(0,255,148,0.3)" }}>
-                <Heart className="w-10 h-10 text-[var(--green)] animate-pulse" />
+          <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex items-center justify-center p-6 animate-in fade-in duration-500">
+            <div className="bg-[#0a0a0a] rounded-[32px] p-8 w-full max-w-sm flex flex-col items-center text-center shadow-2xl relative border border-white/10"
+              style={{ boxShadow: "0 0 100px -20px rgba(255, 61, 127, 0.3)" }}>
+              {/* Top animated icon */}
+              <div className="w-24 h-24 rounded-3xl flex items-center justify-center mb-8 relative group"
+                style={{ background: "linear-gradient(135deg, rgba(255,61,127,0.2), rgba(124,58,255,0.2))", border: "2px solid rgba(255,61,127,0.3)" }}>
+                <div className="absolute inset-0 bg-[var(--pink)]/20 blur-xl rounded-full animate-pulse group-hover:blur-2xl transition-all" />
+                <Heart className="w-12 h-12 text-[var(--pink)] relative z-10 transition-transform group-hover:scale-110" />
               </div>
 
-              <h3 className="text-2xl font-black text-white mb-2 z-10">Sent Successfully!</h3>
-              <p className="text-[var(--text-muted)] text-sm mb-8 z-10 leading-relaxed font-medium">
-                Your anonymous feedback was delivered to <strong className="text-white">@{coolId}</strong>. 
-                <br/><br/>
-                Want to see if they reply or start a real-time text chat with them?
-              </p>
+              <h3 className="text-3xl font-black text-white mb-2 tracking-tight">Sent!</h3>
+              <p className="text-[var(--text-muted)] text-sm mb-10 font-bold uppercase tracking-widest opacity-60">Delivered to @{coolId}</p>
 
-              <div className="flex flex-col w-full gap-3 z-10">
-                {!authUser ? (
-                  <>
-                    <Link 
-                      href="/login" 
-                      className="w-full py-3.5 rounded-xl font-black text-white transition-all hover:scale-[1.02] shadow-lg flex items-center justify-center gap-2"
-                      style={{ background: "linear-gradient(135deg, var(--pink), var(--purple))" }}
-                    >
-                      Create Free Account
-                    </Link>
-                    
-                    <button 
-                      onClick={() => setShowGuestSuccessModal(false)}
-                      className="w-full py-3.5 rounded-xl font-bold text-[var(--text-muted)] hover:text-white transition-colors hover:bg-white/5 border border-transparent hover:border-white/10"
-                    >
-                      Done
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <Link 
-                      href="/inbox?tab=sent" 
-                      className="w-full py-3.5 rounded-xl font-black text-white transition-all hover:scale-[1.02] shadow-lg flex items-center justify-center gap-2"
-                      style={{ background: "linear-gradient(135deg, var(--green), var(--blue))" }}
-                    >
-                      View in Chats
-                    </Link>
-                    
-                    <button 
-                      onClick={() => setShowGuestSuccessModal(false)}
-                      className="w-full py-3.5 rounded-xl font-bold text-[var(--text-muted)] hover:text-white transition-colors hover:bg-white/5 border border-transparent hover:border-white/10"
-                    >
-                      Send Another
-                    </button>
-                  </>
-                )}
+              <div className="flex flex-col w-full gap-4">
+                <p className="text-xs font-black text-white/40 uppercase tracking-[0.2em] mb-1">What&apos;s Next?</p>
+
+                <button
+                  onClick={handleEnablePushNotifications}
+                  disabled={notifStatus === "loading" || notifStatus === "enabled"}
+                  className="w-full p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center gap-4 transition-all hover:bg-white/10 group active:scale-95"
+                >
+                  <div className={`p-2 rounded-xl transition-colors ${notifStatus === "enabled" ? "bg-green-500/20 text-green-400" : "bg-pink-500/10 text-pink-400 group-hover:bg-pink-500/20"}`}>
+                    <Bell className="w-5 h-5" />
+                  </div>
+                  <div className="text-left flex-1 min-w-0">
+                    <p className="text-xs font-black text-white">Enable Notifications</p>
+                    <p className="text-[10px] text-[var(--text-muted)] font-bold truncate">Get alerted when they reply</p>
+                  </div>
+                </button>
+
+                <button
+                  onClick={handleGetMagicLink}
+                  className="w-full p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center gap-4 transition-all hover:bg-white/10 group active:scale-95"
+                >
+                  <div className="p-2 rounded-xl bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/20 transition-colors">
+                    <LinkIcon className="w-5 h-5" />
+                  </div>
+                  <div className="text-left flex-1 min-w-0">
+                    <p className="text-xs font-black text-white">Get update link</p>
+                    <p className="text-[10px] text-[var(--text-muted)] font-bold truncate">Save this chat to your notes</p>
+                  </div>
+                </button>
+
+                <Link
+                  href="/login"
+                  className="w-full p-4 rounded-2xl bg-[#FF3D7F]/10 border border-[#FF3D7F]/20 flex items-center gap-4 transition-all hover:bg-[#FF3D7F]/20 group active:scale-95 shadow-[0_4px_24px_rgba(255,61,127,0.1)]"
+                >
+                  <div className="p-2 rounded-xl bg-[var(--pink)] text-white group-hover:scale-110 transition-transform shadow-lg">
+                    <ShieldCheck className="w-5 h-5" />
+                  </div>
+                  <div className="text-left flex-1 min-w-0">
+                    <p className="text-xs font-black text-white">Save anonymous thread</p>
+                    <p className="text-[10px] text-[var(--pink)] font-black uppercase tracking-tighter">Recommended</p>
+                  </div>
+                </Link>
+
+                <button
+                  onClick={() => handleShare()}
+                  className="w-full p-4 rounded-2xl bg-white/5 border border-white/10 flex items-center gap-4 transition-all hover:bg-white/10 group active:scale-95"
+                >
+                  <div className="p-2 rounded-xl bg-purple-500/10 text-purple-400 group-hover:bg-purple-500/20 transition-colors">
+                    <Share2 className="w-5 h-5" />
+                  </div>
+                  <div className="text-left flex-1 min-w-0">
+                    <p className="text-xs font-black text-white">Share link</p>
+                    <p className="text-[10px] text-[var(--text-muted)] font-bold truncate">Invite others to this chat</p>
+                  </div>
+                </button>
               </div>
+
+              <div className="h-px w-full bg-white/5 my-4" />
+
+              <button
+                onClick={() => {
+                  setShowGuestSuccessModal(false);
+                  setChatMode(true);
+                }}
+                className="w-full py-2 text-xs font-black uppercase tracking-[0.2em] text-[var(--text-muted)] hover:text-white transition-colors"
+              >
+                Skip for now
+              </button>
             </div>
           </div>
+        )}
+        {/* Notification Icon for Landing Page */}
+        {!chatMode && !loading && userId && (
+          <button
+            onClick={() => setChatMode(true)}
+            className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-black/80 backdrop-blur-xl border border-white/10 flex items-center justify-center shadow-2xl z-[100] hover:scale-110 transition-all active:scale-95 group"
+          >
+            <Bell className="w-6 h-6 text-white group-hover:text-[var(--pink)] transition-colors" />
+            {chatHistory.some(m => m.isOwnerReply) && (
+              <>
+                <span className="absolute -top-1 -right-1 w-5 h-5 bg-[var(--pink)] rounded-full border-2 border-[var(--bg-primary)] flex items-center justify-center text-[10px] font-black text-white animate-bounce shadow-lg">
+                  1
+                </span>
+                <span className="absolute inset-0 rounded-full bg-[var(--pink)]/20 animate-ping" />
+              </>
+            )}
+          </button>
         )}
       </main>
     </div>

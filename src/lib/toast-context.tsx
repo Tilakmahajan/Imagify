@@ -37,7 +37,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const addToast = useCallback(
     (message: string, type: ToastType = "info", duration = 4000) => {
       const id = crypto.randomUUID();
-      setToasts((prev) => [...prev, { id, message, type, duration }]);
+      // Only keep the latest toast
+      setToasts([{ id, message, type, duration }]);
       if (duration > 0) {
         setTimeout(() => removeToast(id), duration);
       }
