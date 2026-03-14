@@ -112,11 +112,16 @@ async function getServiceWorkerRegistration(): Promise<ServiceWorkerRegistration
 /**
  * Save FCM token to user's Firestore document for Cloud Functions to use.
  */
-export async function saveFcmToken(userId: string, token: string): Promise<void> {
+export async function saveFcmToken(userId: string | null, token: string, sessionId?: string | null): Promise<void> {
   if (!db) throw new Error("Firestore not configured");
   const firestore = db;
-  const userRef = doc(firestore, "users", userId);
-  await setDoc(userRef, { fcmToken: token, fcmTokenUpdatedAt: new Date().toISOString() }, { merge: true });
+  if (userId) {
+    const userRef = doc(firestore, "users", userId);
+    await setDoc(userRef, { fcmToken: token, fcmTokenUpdatedAt: new Date().toISOString() }, { merge: true });
+  } else if (sessionId) {
+    const sessionRef = doc(firestore, "sessions", sessionId);
+    await setDoc(sessionRef, { fcmToken: token, updatedAt: new Date().toISOString() }, { merge: true });
+  }
 }
 
 /**

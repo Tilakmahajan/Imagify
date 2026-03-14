@@ -6,9 +6,10 @@ import { Lock, Sparkles, MessageCircle, ArrowLeft } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { useToast } from "@/lib/toast-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { getErrorMessage } from "@/lib/error-utils";
 
 export default function LoginPage() {
-  const { user, profile, loading, isConfigured, signInWithGoogle, signInWithFacebook, signInWithYahoo } = useAuth();
+  const { user, profile, loading, isSigningIn, isConfigured, signInWithGoogle, signInWithFacebook, signInWithYahoo } = useAuth();
   const toast = useToast();
 
   useEffect(() => {
@@ -31,21 +32,8 @@ export default function LoginPage() {
       await fn();
       console.log("[Login] handleSignIn:", provider, "completed (popup/redirect should have opened)");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg.includes("auth/popup-closed-by-user") || msg.includes("auth/cancelled-popup-request")) {
-        toast.info("Sign-in cancelled.");
-        return;
-      }
       console.error(`[Auth] ${provider} sign-in failed:`, err);
-      if (msg.includes("auth/popup-blocked") || msg.includes("popup")) {
-        toast.info("Pop-up was blocked. Allow popups or try again (will use redirect).");
-      } else if (msg.includes("auth/unauthorized-domain")) {
-        toast.error("Domain not authorized. Add this URL to Firebase Console → Authentication → Settings → Authorized domains.");
-      } else if (msg.includes("auth/") || msg.includes("network")) {
-        toast.error(`Sign-in failed: ${msg.slice(0, 80)}`);
-      } else {
-        toast.error(`Sign-in failed: ${msg.slice(0, 80)}`);
-      }
+      toast.error(getErrorMessage(err));
     }
   };
 
@@ -106,9 +94,8 @@ export default function LoginPage() {
       <header className="fixed top-0 left-0 right-0 z-50 navbar-glass">
         <nav className="flex h-16 items-center justify-between px-6 sm:px-10 max-w-7xl mx-auto">
           <Link href="/" className="flex items-center gap-2 group">
-            <span className="text-2xl font-black tracking-tight text-[var(--text-primary)] transition-all duration-300 group-hover:scale-105 inline-block" style={{ letterSpacing: "-0.04em" }}>
-              picpop<span className="text-[var(--pink)]">.</span>
-            </span>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo.svg" alt="picpop" className="h-6 sm:h-7 w-auto transition-transform duration-300 group-hover:scale-105 inline-block" />
           </Link>
           <div className="flex items-center gap-2">
             <ThemeToggle />
@@ -177,7 +164,7 @@ export default function LoginPage() {
           <div className="space-y-3">
             <button
               onClick={() => handleSignIn(signInWithGoogle, "Google")}
-              disabled={!isConfigured}
+              disabled={!isConfigured || isSigningIn}
               className="login-card login-btn w-full flex items-center justify-center gap-3 rounded-2xl px-6 py-4 font-black text-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: "#fff", boxShadow: "0 4px 20px rgba(0,0,0,0.2)" }}
             >
@@ -192,7 +179,7 @@ export default function LoginPage() {
 
             <button
               onClick={() => handleSignIn(signInWithFacebook, "Facebook")}
-              disabled={!isConfigured}
+              disabled={!isConfigured || isSigningIn}
               className="login-card login-btn w-full flex items-center justify-center gap-3 rounded-2xl px-6 py-4 font-black text-white disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: "#1877F2", boxShadow: "0 4px 20px rgba(24,119,242,0.4)" }}
             >
@@ -204,7 +191,7 @@ export default function LoginPage() {
 
             <button
               onClick={() => handleSignIn(signInWithYahoo, "Yahoo")}
-              disabled={!isConfigured}
+              disabled={!isConfigured || isSigningIn}
               className="login-card login-btn w-full flex items-center justify-center gap-3 rounded-2xl px-6 py-4 font-black text-white disabled:opacity-50 disabled:cursor-not-allowed"
               style={{ background: "linear-gradient(135deg, #6001D2, #7C3AFF)", boxShadow: "0 4px 20px rgba(124,58,255,0.4)" }}
             >
@@ -216,7 +203,7 @@ export default function LoginPage() {
           </div>
 
           <p className="mt-8 text-center text-sm text-[var(--text-muted)] font-semibold">
-            By continuing, you agree to our Terms & Privacy Policy.
+            By continuing, you agree to our <Link href="/terms" className="text-[var(--pink)] hover:underline">Terms</Link> & <Link href="/privacy" className="text-[var(--purple)] hover:underline">Privacy Policy</Link>.
           </p>
         </div>
       </section>
@@ -224,12 +211,14 @@ export default function LoginPage() {
       {/* Footer */}
       <footer className="border-t border-[var(--border)] bg-[var(--bg-secondary)] py-8 px-6">
         <div className="max-w-6xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-4">
-          <span className="text-lg font-black bg-clip-text text-transparent" style={{ backgroundImage: "linear-gradient(90deg, var(--pink), var(--purple))" }}>
-            picpop.
-          </span>
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo.svg" alt="picpop" className="h-6 w-auto inline-block" />
           <div className="flex gap-6 text-sm">
+            <Link href="/about" className="footer-link">about</Link>
             <Link href="/" className="footer-link">home</Link>
             <Link href="/dashboard" className="footer-link">dashboard</Link>
+            <Link href="/privacy" className="footer-link">privacy</Link>
+            <Link href="/terms" className="footer-link">terms</Link>
           </div>
         </div>
         <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-[var(--text-muted)] font-semibold"><Sparkles className="w-3.5 h-3.5" /> anonymous image feedback</p>

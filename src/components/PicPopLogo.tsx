@@ -1,13 +1,13 @@
 /** Reusable PicPop logo — matches navbar branding (picpop + pink dot) */
 export function PicPopLogo({ className = "", size = "md" }: { className?: string; size?: "sm" | "md" | "lg" }) {
-  const sizeClasses = { sm: "text-lg", md: "text-xl sm:text-2xl", lg: "text-3xl" };
+  const sizeClasses = { sm: "h-5", md: "h-6 sm:h-7", lg: "h-8 sm:h-10" };
   return (
-    <span
-      className={`font-black tracking-tight inline-block ${sizeClasses[size]} ${className}`}
-      style={{ letterSpacing: "-0.04em" }}
-    >
-      picpop<span className="text-[var(--pink)]">.</span>
-    </span>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src="/logo.svg"
+      alt="PicPop"
+      className={`w-auto inline-block ${sizeClasses[size]} ${className}`}
+    />
   );
 }
 
@@ -15,7 +15,7 @@ export function PicPopLogo({ className = "", size = "md" }: { className?: string
 export function PicPopIcon({ className = "" }: { className?: string }) {
   return (
     <img
-      src="/icon.svg"
+      src="/logo.svg"
       alt="PicPop"
       className={className}
     />

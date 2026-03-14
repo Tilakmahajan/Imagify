@@ -28,19 +28,11 @@ export default function CreateIdPage() {
   }, [user, loading, router]);
 
   useEffect(() => {
-    if (!loading && user && profile?.coolId) {
+    if (!loading && user && profile && profile.coolId) {
       const id = setTimeout(() => router.replace("/dashboard"), 0);
       return () => clearTimeout(id);
     }
   }, [user, profile, loading, router]);
-
-  const checkAvailability = async (id: string): Promise<boolean> => {
-    if (!db) return false;
-    const firestore = db;
-    const ref = doc(firestore, "usernames", id.toLowerCase());
-    const snap = await getDoc(ref);
-    return !snap.exists();
-  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -63,21 +55,22 @@ export default function CreateIdPage() {
 
     try {
       await ensureFirestoreNetwork();
-      const available = await checkAvailability(lower);
-      if (!available) {
-        setError(`"${trimmed}" is taken. Try another?`);
-        setSubmitting(false);
-        return;
-      }
-
       if (!db || !user) {
         setError("Something went wrong. Try again.");
         setSubmitting(false);
         return;
       }
+
       const firestore = db;
       const userRef = doc(firestore, "users", user.uid);
       const usernameRef = doc(firestore, "usernames", lower);
+
+      const usernameSnap = await getDoc(usernameRef);
+      if (usernameSnap.exists() && usernameSnap.data().uid !== user.uid) {
+        setError(`"${trimmed}" is taken. Try another?`);
+        setSubmitting(false);
+        return;
+      }
 
       await Promise.all([
         setDoc(userRef, { coolId: trimmed }, { merge: true }),

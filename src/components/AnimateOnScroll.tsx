@@ -38,10 +38,10 @@ export function AnimateOnScroll({
   }, [delay, threshold]);
 
   const translateMap = {
-    up: "translateY(24px)",
-    down: "translateY(-24px)",
-    left: "translateX(24px)",
-    right: "translateX(-24px)",
+    up: "translateY(16px) translateZ(0)",
+    down: "translateY(-16px) translateZ(0)",
+    left: "translateX(16px) translateZ(0)",
+    right: "translateX(-16px) translateZ(0)",
   };
 
   return (
@@ -50,8 +50,9 @@ export function AnimateOnScroll({
       className={className}
       style={{
         opacity: isVisible ? 1 : 0,
-        transform: isVisible ? "translate(0)" : translateMap[direction],
-        transition: "opacity 0.6s ease-out, transform 0.6s ease-out",
+        transform: isVisible ? "translate3d(0, 0, 0)" : translateMap[direction],
+        transition: "opacity 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1)",
+        willChange: "opacity, transform",
       }}
     >
       {children}

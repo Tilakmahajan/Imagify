@@ -33,6 +33,8 @@ interface ShareButtonsProps {
   };
   /** User's feedback link for QR code (e.g. origin/u/username) */
   userFeedbackLink?: string;
+  /** Optional feedback ID to track reshares */
+  feedbackId?: string;
   /** Simple mode: big image + single Share button (no platform-specific buttons) */
   simple?: boolean;
 }
@@ -59,6 +61,7 @@ export function ShareButtons({
   title = "Check out this on PicPop!",
   snapshotData,
   userFeedbackLink,
+  feedbackId,
   simple = false,
 }: ShareButtonsProps) {
   const [copied, setCopied] = useState(false);
@@ -74,17 +77,32 @@ export function ShareButtons({
       ? `${window.location.origin}${shareUrl.startsWith("/") ? "" : "/"}${shareUrl}`
       : shareUrl;
 
+  const logReshare = async () => {
+    if (!feedbackId) return;
+    try {
+      const { httpsCallable } = await import("firebase/functions");
+      const { getAppFunctions } = await import("@/lib/functions");
+      const functions = getAppFunctions();
+      if (functions) {
+        await httpsCallable(functions, "logFeedbackActivity")({ feedbackId, type: "reshare" });
+      }
+    } catch (err) { }
+  };
+
   const copyToClipboard = () => {
     navigator.clipboard.writeText(fullUrl);
     setCopied(true);
+    logReshare();
     setTimeout(() => setCopied(false), 2000);
   };
 
   const handleWhatsApp = () => {
+    logReshare();
     window.location.href = getWhatsAppShareUrl(fullUrl, title);
   };
 
   const handleSnapchat = () => {
+    logReshare();
     window.location.href = getSnapchatShareUrl(fullUrl);
   };
 
@@ -185,6 +203,7 @@ export function ShareButtons({
   };
 
   const handleInstagram = () => {
+    logReshare();
     const ua = navigator.userAgent.toLowerCase();
     const isMobile = /android|iphone|ipad|ipod/.test(ua);
 
@@ -226,6 +245,7 @@ export function ShareButtons({
     "rounded-lg p-2.5 transition-all shrink-0 disabled:opacity-60 flex items-center justify-center min-w-[44px] min-h-[44px]";
 
   const handleSimpleShare = async () => {
+    logReshare();
     if (imageUrl && navigator.share) {
       try {
         const res = await fetch(imageUrl, { mode: "cors" });

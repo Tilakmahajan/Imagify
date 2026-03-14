@@ -12,11 +12,13 @@ import {
   ArrowLeft,
   RefreshCw,
   Unlock,
-  ImagePlus,
+  ArchiveX,
   Trash2,
   FolderOpen,
   Plus,
+  Copy,
   Upload,
+  ImagePlus,
 } from "lucide-react";
 import { useAuth } from "@/lib/auth-context";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -67,6 +69,7 @@ export default function AdminPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("users");
+  const [searchQuery, setSearchQuery] = useState("");
   const [unblocking, setUnblocking] = useState<string | null>(null);
   const [bootstrapKey, setBootstrapKey] = useState("");
   const [bootstrapping, setBootstrapping] = useState(false);
@@ -298,8 +301,12 @@ export default function AdminPage() {
       toast.success("Added to browse");
       fetchData();
     } catch (err: unknown) {
-      const e = err as { details?: { message?: string } };
-      toast.error(e?.details?.message || "Failed to add");
+      const e = err as { code?: string; details?: { message?: string } };
+      if (e?.code === "already-exists") {
+        toast.error("This feedback image is already in the browse section.");
+      } else {
+        toast.error(e?.details?.message || "Failed to add to browse");
+      }
     } finally {
       setAddingFromFeedbackId(null);
     }
@@ -325,6 +332,14 @@ export default function AdminPage() {
 
   const categories = data?.categories ?? [];
   const browseImages = data?.browseImages ?? [];
+
+  const searchFilter = (item: any) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase();
+    return Object.values(item).some(val => 
+      val && String(val).toLowerCase().includes(q)
+    );
+  };
 
   if (authLoading || !user) {
     return (
@@ -417,17 +432,37 @@ export default function AdminPage() {
                   key={id}
                   type="button"
                   onClick={() => setTab(id)}
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${
-                    tab === id
+                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm transition-colors ${tab === id
                       ? "bg-[var(--pink)] text-white"
                       : "bg-white/5 text-[var(--text-muted)] hover:bg-white/10 hover:text-white"
-                  }`}
+                    }`}
                 >
                   <Icon className="w-4 h-4" />
                   {label}
                   <span className="text-xs opacity-80">({count})</span>
                 </button>
               ))}
+            </div>
+
+            <div className="mb-6 flex items-center gap-4">
+              <div className="relative flex-1 max-w-sm">
+                <input
+                  type="text"
+                  placeholder={`Search ${tab}...`}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="w-full rounded-xl px-4 py-2.5 text-sm bg-white/5 border border-[var(--border)] focus:outline-none focus:ring-2 focus:ring-[var(--pink)] placeholder-white/40 shadow-sm"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={fetchData}
+                disabled={loading}
+                className="p-2.5 rounded-xl bg-white/5 border border-[var(--border)] hover:bg-white/10 transition-all text-[var(--text-muted)] hover:text-white"
+                title="Refresh data"
+              >
+                <RefreshCw className={`w-5 h-5 ${loading ? "animate-spin" : ""}`} />
+              </button>
             </div>
 
             <div className="rounded-2xl border border-[var(--border)] overflow-hidden" style={{ background: "var(--bg-card)" }}>
@@ -444,9 +479,9 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {data.users.map((u) => (
+                      {data.users.filter(searchFilter).map((u) => (
                         <tr key={u.id} className="border-b border-[var(--border)]">
-                          <td className="p-3 font-mono text-xs break-all">{u.id}</td>
+                          <td className="p-3 font-mono text-xs truncate max-w-[100px]" title={u.id as string}>{u.id as string}</td>
                           <td className="p-3">@{String(u.coolId || "—")}</td>
                           <td className="p-3">{(u.email as string) || "—"}</td>
                           <td className="p-3">{(u.displayName as string) || "—"}</td>
@@ -467,25 +502,23 @@ export default function AdminPage() {
                         <th className="p-3 font-bold">Action</th>
                         <th className="p-3 font-bold">Reason</th>
                         <th className="p-3 font-bold">Feedback ID</th>
-                        <th className="p-3 font-bold">Reporter IP</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.reports.map((r) => (
+                      {data.reports.filter(searchFilter).map((r) => (
                         <tr key={r.id} className="border-b border-[var(--border)]">
                           <td className="p-3 text-xs text-[var(--text-muted)]">{formatDate(r.createdAt)}</td>
                           <td className="p-3">
                             <span
-                              className={`px-2 py-0.5 rounded text-xs font-bold ${
-                                r.action === "block" ? "bg-amber-500/20 text-amber-400" : "bg-white/10"
-                              }`}
+                              className={`px-2 py-0.5 rounded text-xs font-bold ${r.action === "block" ? "bg-amber-500/20 text-amber-400" : "bg-white/10"
+                                }`}
                             >
                               {String(r.action || "report")}
                             </span>
                           </td>
                           <td className="p-3">{(r.reason as string) || "—"}</td>
-                          <td className="p-3 font-mono text-xs">{(r.feedbackId as string) || "—"}</td>
-                          <td className="p-3 font-mono text-xs">{(r.reporterIp as string) || "—"}</td>
+                          <td className="p-3 font-mono text-xs truncate max-w-[100px]" title={r.feedbackId as string}>{(r.feedbackId as string) || "—"}</td>
+                          <td className="p-3 font-mono text-xs truncate max-w-[100px]" title={r.feedbackId as string}>{(r.feedbackId as string) || "—"}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -498,7 +531,7 @@ export default function AdminPage() {
                   <table className="w-full text-left text-sm">
                     <thead>
                       <tr className="border-b border-[var(--border)]">
-                        <th className="p-3 font-bold">IP</th>
+                        <th className="p-3 font-bold">Blocked ID</th>
                         <th className="p-3 font-bold">Reason</th>
                         <th className="p-3 font-bold">Feedback ID</th>
                         <th className="p-3 font-bold">Blocked At</th>
@@ -506,11 +539,11 @@ export default function AdminPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {data.blockedIps.map((b) => (
+                      {data.blockedIps.filter(searchFilter).map((b) => (
                         <tr key={b.id} className="border-b border-[var(--border)]">
-                          <td className="p-3 font-mono text-xs">{(b.ip as string) || b.id}</td>
+                          <td className="p-3 font-mono text-xs truncate max-w-[120px]" title={b.id}>ID: {b.id.slice(0, 8)}...</td>
                           <td className="p-3">{(b.reason as string) || "—"}</td>
-                          <td className="p-3 font-mono text-xs">{(b.feedbackId as string) || "—"}</td>
+                          <td className="p-3 font-mono text-xs truncate max-w-[100px]" title={b.feedbackId as string}>{(b.feedbackId as string) || "—"}</td>
                           <td className="p-3 text-xs text-[var(--text-muted)]">{formatDate(b.createdAt)}</td>
                           <td className="p-3">
                             <button
@@ -538,20 +571,62 @@ export default function AdminPage() {
                         <th className="p-3 font-bold">ID</th>
                         <th className="p-3 font-bold">Type</th>
                         <th className="p-3 font-bold">Image/Recipient</th>
-                        <th className="p-3 font-bold">Deleted</th>
+                        <th className="p-3 font-bold">Feedback Image</th>
+                        <th className="p-3 font-bold">Views</th>
+                        <th className="p-3 font-bold">Shares</th>
+                        <th className="p-3 font-bold text-center">Identity</th>
+                        <th className="p-3 font-bold text-center">Deleted</th>
                         <th className="p-3 font-bold">Created</th>
                         <th className="p-3 font-bold">Action</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {data.feedbacks.map((f) => (
+                      {data.feedbacks.filter(searchFilter).map((f) => (
                         <tr key={f.id} className="border-b border-[var(--border)]">
-                          <td className="p-3 font-mono text-xs break-all">{f.id}</td>
-                          <td className="p-3">{f.imageId ? "image" : "inbox"}</td>
-                          <td className="p-3 font-mono text-xs">
-                            {(f.imageId as string) || (f.recipientId as string) || "—"}
+                          <td className="p-3 font-mono text-xs truncate max-w-[100px]" title={f.id as string}>
+                            {f.id as string}
                           </td>
-                          <td className="p-3">{f.deleted ? "Yes" : "No"}</td>
+                          <td className="p-3">{f.imageId ? "image" : "inbox"}</td>
+                          <td className="p-3">
+                            <div className="flex flex-col gap-0.5 max-w-[150px]">
+                              <span className="font-mono text-xs truncate" title={(f.imageId as string) || (f.recipientId as string) || "—"}>
+                                {(f.imageId as string) || (f.recipientId as string) || "—"}
+                              </span>
+                              {!f.imageId && typeof f.recipientId === "string" ? (() => {
+                                const u = data.users.find((u) => u.id === f.recipientId);
+                                const email = u && typeof u.email === "string" ? u.email : null;
+                                return email ? (
+                                  <span className="text-[10px] text-[var(--text-muted)] truncate" title={email}>
+                                    {email}
+                                  </span>
+                                ) : null;
+                              })() : null}
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            {(f as { feedbackImageUrl?: string }).feedbackImageUrl ? (
+                              <a href={(f as { feedbackImageUrl?: string }).feedbackImageUrl} target="_blank" rel="noopener noreferrer">
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img src={(f as { feedbackImageUrl?: string }).feedbackImageUrl} alt="Feedback" className="w-10 h-10 object-cover rounded bg-white/10" loading="lazy" />
+                              </a>
+                            ) : "—"}
+                          </td>
+                          <td className="p-3">{Number(f.viewCount) || 0}</td>
+                          <td className="p-3">{Number(f.reshareCount) || 0}</td>
+                          <td className="p-3 text-center">
+                            {f.submitterId ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black bg-blue-500/20 text-blue-400 border border-blue-500/30">VERIFIED</span>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-black bg-white/10 text-[var(--text-muted)] border border-white/10">ANON</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-center">
+                            {f.deleted ? (
+                              <span className="text-red-400 font-bold">Yes</span>
+                            ) : (
+                              <span className="opacity-40">No</span>
+                            )}
+                          </td>
                           <td className="p-3 text-xs text-[var(--text-muted)]">{formatDate(f.createdAt)}</td>
                           <td className="p-3">
                             {(f as { feedbackImageUrl?: string }).feedbackImageUrl && (
@@ -741,7 +816,7 @@ export default function AdminPage() {
                         No browse images. Add from URL above or from Recent Feedbacks.
                       </p>
                     ) : (
-                      browseImages.map((img) => (
+                      browseImages.filter(searchFilter).map((img) => (
                         <div
                           key={img.id}
                           className="rounded-xl overflow-hidden border border-[var(--border)] bg-white/5"

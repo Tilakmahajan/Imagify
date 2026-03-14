@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { ImageIcon, Loader2 } from "lucide-react";
-import { getAppFunctions } from "@/lib/functions";
+import { ImageIcon, Loader2, Globe } from "lucide-react";
+import { getFirestore, collection, getDocs, orderBy, query } from "firebase/firestore";
+import { app } from "@/lib/firebase";
+import { GoogleSearchModal } from "./GoogleSearchModal";
 
 export interface SharedFeedback {
   id: string;
@@ -29,32 +31,17 @@ function LazyImage({
   src,
   alt,
   className = "",
-  scrollRoot,
+  id,
+  isVisible,
 }: {
   src: string;
   alt: string;
   className?: string;
-  scrollRoot?: HTMLElement | null;
+  id: string;
+  isVisible: boolean;
 }) {
-  const [isVisible, setIsVisible] = useState(false);
-  const imgRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const el = imgRef.current;
-    if (!el) return;
-    const root = scrollRoot ?? (el.closest("[data-scroll-root]") as HTMLElement | null) ?? null;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) setIsVisible(true);
-      },
-      { root, rootMargin: root ? "100px" : "200px", threshold: 0.01 }
-    );
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [scrollRoot]);
-
   return (
-    <div ref={imgRef} className={`w-full h-full overflow-hidden ${className}`}>
+    <div data-lazy-placeholder data-lazy-id={id} className={`w-full h-full overflow-hidden ${className}`}>
       {isVisible ? (
         <img
           src={src}
@@ -83,9 +70,12 @@ export function ExploreImages({
   const [submittingId, setSubmittingId] = useState<string | null>(null);
   const [selectedCategoryId, setSelectedCategoryId] = useState<string | null>(null);
   const [hasLoadedBrowse, setHasLoadedBrowse] = useState(false);
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
+  const [displayLimit, setDisplayLimit] = useState(24);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const sectionRef = useRef<HTMLElement>(null);
   const hasTriggeredRef = useRef(false);
-  const [browseScrollRoot, setBrowseScrollRoot] = useState<HTMLElement | null>(null);
+  const scrollRootRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     const el = sectionRef.current;
@@ -109,16 +99,18 @@ export function ExploreImages({
     setLoading(true);
     const run = async () => {
       try {
-        const functions = getAppFunctions();
-        if (!functions) throw new Error("Firebase not configured");
-        const { httpsCallable } = await import("firebase/functions");
-        const getBrowseData = httpsCallable<unknown, { categories: BrowseCategory[]; browseImages: BrowseImage[] }>(functions, "getBrowseData");
-        const res = await getBrowseData({});
+        if (!app) throw new Error("Firebase not configured");
+        const db = getFirestore(app);
+        const [catSnap, imgSnap] = await Promise.all([
+          getDocs(query(collection(db, "categories"), orderBy("order"))),
+          getDocs(collection(db, "browseImages")),
+        ]);
         if (mounted) {
-          setCategories(res.data?.categories ?? []);
-          setBrowseImages(res.data?.browseImages ?? []);
+          setCategories(catSnap.docs.map((d) => ({ id: d.id, ...d.data() } as BrowseCategory)));
+          setBrowseImages(imgSnap.docs.map((d) => ({ id: d.id, ...d.data() } as BrowseImage)));
         }
-      } catch {
+      } catch (err) {
+        console.error("ExploreImages: failed to load browse data", err);
         if (mounted) {
           setCategories([]);
           setBrowseImages([]);
@@ -135,6 +127,38 @@ export function ExploreImages({
     ? browseImages.filter((img) => img.categoryIds?.includes(selectedCategoryId))
     : browseImages;
 
+  const displayedImages = filteredImages.slice(0, displayLimit);
+
+  useEffect(() => {
+    const root = scrollRootRef.current;
+    if (!root || displayedImages.length === 0) return;
+    const placeholders = root.querySelectorAll<HTMLElement>("[data-lazy-placeholder]");
+    const observer = new IntersectionObserver(
+      (entries) => {
+        setVisibleIds((prev) => {
+          const next = new Set(prev);
+          entries.forEach((entry) => {
+            const id = (entry.target as HTMLElement).dataset.lazyId;
+            if (id && entry.isIntersecting) next.add(id);
+          });
+          return next;
+        });
+      },
+      { root, rootMargin: "120px", threshold: 0.01 }
+    );
+    placeholders.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [loading, selectedCategoryId, displayedImages.length]);
+
+  const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const { scrollTop, scrollHeight, clientHeight } = e.currentTarget;
+    if (scrollHeight - scrollTop <= clientHeight + 100) {
+      if (displayLimit < filteredImages.length) {
+        setDisplayLimit((prev) => prev + 24);
+      }
+    }
+  };
+
   const handleSelect = async (img: BrowseImage) => {
     if (disabled || submittingId || !onSubmitShared) return;
     setSubmittingId(img.id);
@@ -147,28 +171,49 @@ export function ExploreImages({
 
   return (
     <section ref={sectionRef} className="mt-8 w-full min-w-0">
-      <div className="flex items-center gap-2 mb-4">
-        <ImageIcon className="w-5 h-5 text-[var(--purple)]" />
-        <h3 className="font-black text-[var(--text-primary)]">Browse</h3>
+      <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+          <ImageIcon className="w-5 h-5 text-[var(--purple)]" />
+          <h3 className="font-black text-[var(--text-primary)]">Browse</h3>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsSearchOpen(true)}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/5 border border-[var(--border)] hover:bg-[var(--purple)]/10 hover:border-[var(--purple)]/30 transition-all text-xs font-bold text-[var(--text-primary)] group"
+        >
+          <Globe className="w-3.5 h-3.5 text-[var(--purple)] group-hover:scale-110 transition-transform" />
+          Search Global
+        </button>
       </div>
+
+      <GoogleSearchModal
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        onSelect={async (url) => {
+          setIsSearchOpen(false);
+          if (onSubmitShared) {
+            await onSubmitShared({ id: "google-search-" + Date.now(), feedbackImageUrl: url, createdAt: "" });
+          }
+        }}
+      />
 
       {!hasLoadedBrowse ? (
         <button
           type="button"
           onClick={() => setHasLoadedBrowse(true)}
-          className="w-full py-12 border-2 border-dashed border-gray-700 rounded-xl text-[var(--text-muted)]"
+          className="w-full py-12 border-2 border-dashed border-gray-700/50 rounded-xl text-[var(--text-muted)] hover:border-[var(--purple)]/50 transition-colors"
         >
-          Tap to load images
+          Tap to explore reactions
         </button>
       ) : loading ? (
-        <div className="flex justify-center py-12"><Loader2 className="animate-spin" /></div>
+        <div className="flex justify-center py-12"><Loader2 className="animate-spin text-[var(--pink)]" /></div>
       ) : (
         <>
           {categories.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-4">
               <button
                 type="button"
-                onClick={() => setSelectedCategoryId(null)}
+                onClick={() => { setSelectedCategoryId(null); setDisplayLimit(24); }}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                   selectedCategoryId === null
                     ? "bg-[var(--purple)] text-white"
@@ -181,7 +226,7 @@ export function ExploreImages({
                 <button
                   key={c.id}
                   type="button"
-                  onClick={() => setSelectedCategoryId((prev) => (prev === c.id ? null : c.id))}
+                  onClick={() => { setSelectedCategoryId((prev) => (prev === c.id ? null : c.id)); setDisplayLimit(24); }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
                     selectedCategoryId === c.id
                       ? "bg-[var(--purple)] text-white"
@@ -194,22 +239,22 @@ export function ExploreImages({
             </div>
           )}
           <div
-            ref={(el) => setBrowseScrollRoot(el)}
-            data-scroll-root
+            ref={scrollRootRef}
+            onScroll={handleScroll}
             className="grid grid-cols-3 sm:grid-cols-4 gap-2 max-h-[400px] overflow-y-auto p-1 rounded-xl"
             style={{
               gridAutoRows: "minmax(100px, auto)",
               WebkitOverflowScrolling: "touch",
             }}
           >
-            {filteredImages.length === 0 ? (
+            {displayedImages.length === 0 ? (
               <p className="col-span-full py-8 text-center text-[var(--text-muted)] text-sm">
                 {browseImages.length === 0
                   ? "No images yet. Admin can add images from the admin panel."
                   : "No images in this category."}
               </p>
             ) : (
-              filteredImages.map((img) => (
+              displayedImages.map((img) => (
                 <button
                   key={img.id}
                   type="button"
@@ -221,7 +266,8 @@ export function ExploreImages({
                   <LazyImage
                     src={img.imageUrl}
                     alt={img.name || "Browse"}
-                    scrollRoot={browseScrollRoot}
+                    id={img.id}
+                    isVisible={visibleIds.has(img.id)}
                   />
                   {submittingId === img.id && (
                     <div className="absolute inset-0 bg-black/60 flex items-center justify-center">
@@ -230,6 +276,11 @@ export function ExploreImages({
                   )}
                 </button>
               ))
+            )}
+            {displayLimit < filteredImages.length && (
+              <div className="col-span-full py-4 flex justify-center">
+                <Loader2 className="w-5 h-5 animate-spin text-[var(--text-muted)] opacity-50" />
+              </div>
             )}
           </div>
         </>

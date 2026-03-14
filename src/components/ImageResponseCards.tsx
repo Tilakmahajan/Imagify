@@ -35,7 +35,7 @@ export function ImageResponseCards() {
           <div className="p-[3px] rounded-2xl" style={{ background: r.bg, boxShadow: `0 12px 40px ${r.glow}` }}>
             <div className="w-24 h-28 sm:w-28 sm:h-34 md:w-32 md:h-40 rounded-xl overflow-hidden bg-black">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={r.src} alt="response" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+              <img src={r.src} alt="response" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" loading="lazy" />
             </div>
           </div>
         </div>

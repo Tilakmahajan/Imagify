@@ -8,7 +8,7 @@ type Theme = "dark" | "light";
 const STORAGE_KEY = "picpop_theme";
 
 /** Routes that must always be dark (no theme toggle) */
-const DARK_ONLY_ROUTES = ["/", "/login"];
+const DARK_ONLY_ROUTES = ["/login"];
 
 interface ThemeContextType {
   theme: Theme;

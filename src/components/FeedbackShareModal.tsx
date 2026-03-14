@@ -34,6 +34,7 @@ export function FeedbackShareModal({
   allData,
   shareUrl,
   userFeedbackLink,
+  feedbackId,
   description = "Anonymous reaction via picpop",
 }: any) {
   const [sharing, setSharing] = useState(false);
@@ -145,6 +146,17 @@ export function FeedbackShareModal({
         link.href = dataUrl;
         link.download = "picpop-feedback.png";
         link.click();
+      }
+      
+      if (feedbackId) {
+        try {
+          const { httpsCallable } = await import("firebase/functions");
+          const { getAppFunctions } = await import("@/lib/functions");
+          const functions = getAppFunctions();
+          if (functions) {
+            await httpsCallable(functions, "logFeedbackActivity")({ feedbackId, type: "reshare" });
+          }
+        } catch (err) { }
       }
     } catch (err) {
       console.error("Capture Process Error:", err);

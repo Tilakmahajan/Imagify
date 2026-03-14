@@ -66,3 +66,26 @@ export async function uploadFeedbackImage(
   await uploadBytes(storageRef, compressed);
   return getDownloadURL(storageRef);
 }
+
+/** Upload any chat attachment (image or document) */
+export async function uploadAttachment(
+  file: File,
+  feedbackId: string
+): Promise<string> {
+  if (!storage) throw new Error("Firebase Storage not configured");
+
+  let toUpload: File | Blob = file;
+  if (file.type.startsWith("image/")) {
+    try {
+      toUpload = await compressImage(file, "feedback");
+    } catch (e) {
+      console.warn("Compression failed, uploading original:", e);
+    }
+  }
+
+  const path = `chat_attachments/${feedbackId}/${file.name}`;
+  const storageRef = ref(storage, path);
+
+  await uploadBytes(storageRef, toUpload);
+  return getDownloadURL(storageRef);
+}
