@@ -508,6 +508,21 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
     }
 
     const visitorId = uid || anonymousId;
+    let threadId = request.data.threadId || null;
+
+    // If we have a parentId but no threadId, try to inherit threadId from parent
+    if (parentId && !threadId) {
+      const parentSnap = await db.doc(`feedbacks/${parentId}`).get();
+      if (parentSnap.exists) {
+        threadId = parentSnap.data().threadId || parentId;
+      }
+    }
+
+    // Fallback to new threadId if still null
+    if (!threadId) {
+      threadId = require("crypto").randomUUID();
+    }
+
     const feedbackData = {
       createdAt: new Date().toISOString(),
       submitterId: uid,
@@ -515,7 +530,7 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
       anonymousId,
       visitorId, // NEW: Thread Identifier
       sessionId: request.data.sessionId || null,
-      threadId: request.data.threadId || require("crypto").randomUUID(),
+      threadId,
       deleted: false,
       recipientId: resolvedRecipientId, // The profile owner
     };
@@ -539,7 +554,7 @@ exports.submitFeedback = onCall({ cors: CORS_ORIGINS }, async (request) => {
       }, { merge: true });
     }
 
-    return { success: true, anonymousId, threadId: feedbackData.threadId };
+    return { success: true, anonymousId, threadId };
   } catch (err) {
     if (err && err.code) throw err;
     console.error("submitFeedback error:", err);
@@ -560,42 +575,34 @@ exports.getAnonymousChatHistory = onCall({ cors: CORS_ORIGINS }, async (request)
 
     const ip = getClientIp(request.rawRequest);
     const anonymousId = getIpHash(ip);
-    // If threadId is provided, we only want THAT thread's history
-    if (threadId) {
-      const snap = await db.collection("feedbacks")
-        .where("threadId", "==", threadId)
-        .limit(200)
-        .get();
-      
-      const items = snap.docs
-        .filter(d => d.data().deleted !== true)
-        .map(d => ({ id: d.id, ...d.data() }))
-        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-      
-      return { success: true, anonymousId, items };
-    }
-
-    // Fix: properly fetch items for the anonymous IP or visitorId
-    const [snapIp, snapVisitor] = await Promise.all([
+    const [snapIp, snapVisitor, snapThread] = await Promise.all([
       db.collection("feedbacks")
         .where("recipientId", "==", recipientId)
         .where("anonymousId", "==", anonymousId)
+        .orderBy("createdAt", "desc")
         .limit(100)
         .get(),
       db.collection("feedbacks")
         .where("recipientId", "==", recipientId)
         .where("visitorId", "==", anonymousId)
+        .orderBy("createdAt", "desc")
         .limit(100)
-        .get()
+        .get(),
+      threadId ? db.collection("feedbacks")
+        .where("recipientId", "==", recipientId)
+        .where("threadId", "==", threadId)
+        .orderBy("createdAt", "desc")
+        .limit(100)
+        .get() : Promise.resolve({ docs: [] })
     ]);
 
-    const ipDocs = [...snapIp.docs, ...snapVisitor.docs]
+    const initialDocs = [...snapIp.docs, ...snapVisitor.docs, ...snapThread.docs]
       .filter(d => d.data().deleted !== true)
       .map(d => ({ id: d.id, ...d.data() }));
     
     // De-duplicate
     const seenMap = new Map();
-    ipDocs.forEach(d => seenMap.set(d.id, d));
+    initialDocs.forEach(d => seenMap.set(d.id, d));
     let finalItems = Array.from(seenMap.values());
 
     // Query 2: By sessionId if provided
@@ -610,11 +617,10 @@ exports.getAnonymousChatHistory = onCall({ cors: CORS_ORIGINS }, async (request)
         .filter(d => d.data().deleted !== true)
         .map(d => ({ id: d.id, ...d.data() }));
       
-      const seenIds = new Set(finalItems.map(i => i.id));
       for (const item of sessionItems) {
-        if (!seenIds.has(item.id)) {
+        if (!seenMap.has(item.id)) {
           finalItems.push(item);
-          seenIds.add(item.id);
+          seenMap.set(item.id, item);
         }
       }
     }
@@ -622,7 +628,6 @@ exports.getAnonymousChatHistory = onCall({ cors: CORS_ORIGINS }, async (request)
     // Query 3: By UID if authenticated
     if (request.auth?.uid) {
       const uid = request.auth.uid;
-      // Items sent by this user or targeted to this user
       const [snapSent, snapReplies] = await Promise.all([
         db.collection("feedbacks").where("recipientId", "==", recipientId).where("submitterId", "==", uid).limit(100).get(),
         db.collection("feedbacks").where("submitterId", "==", recipientId).where("recipientId", "==", uid).limit(100).get()
@@ -632,20 +637,23 @@ exports.getAnonymousChatHistory = onCall({ cors: CORS_ORIGINS }, async (request)
         .filter(d => d.data().deleted !== true)
         .map(d => ({ id: d.id, ...d.data() }));
 
-      const seenIds = new Set(finalItems.map(i => i.id));
       for (const item of uidItems) {
-        if (!seenIds.has(item.id)) {
+        if (!seenMap.has(item.id)) {
           finalItems.push(item);
-          seenIds.add(item.id);
+          seenMap.set(item.id, item);
         }
       }
+    }
+
+    // Strict Thread Filter: If threadId is provided, ONLY return items from that thread
+    if (threadId) {
+      finalItems = finalItems.filter(item => item.threadId === threadId);
     }
 
     // Sort by time
     finalItems.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
 
     // Security Filter: If an item has a targetUid, and it's NOT the current user's UID, remove it.
-    // This prevents anon users on the same IP from seeing private replies meant for a verified user.
     finalItems = finalItems.filter(item => {
       if (!item.targetUid) return true;
       return item.targetUid === request.auth?.uid;

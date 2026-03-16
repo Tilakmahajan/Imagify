@@ -53,13 +53,14 @@ function getRecentChats(): RecentChat[] {
   } catch { return []; }
 }
 
-function saveRecentChat(coolId: string, userId: string, threadId: string | null, lastImageUrl?: string) {
-  if (typeof window === "undefined" || !coolId || !userId) return;
+function saveRecentChat(coolId: string, userId: string, threadId: string | null, lastImageUrl?: string): RecentChat[] {
+  if (typeof window === "undefined" || !coolId || !userId) return [];
   const recent = getRecentChats();
   // Filter out the exact same thread to move it to the top
   const filtered = recent.filter(c => !(c.coolId === coolId && c.threadId === threadId));
-  filtered.unshift({ coolId, userId, threadId, lastImageUrl, lastActive: new Date().toISOString() });
-  localStorage.setItem("picpop_recent_chats", JSON.stringify(filtered.slice(0, 15)));
+  const newList = [{ coolId, userId, threadId, lastImageUrl, lastActive: new Date().toISOString() }, ...filtered].slice(0, 15);
+  localStorage.setItem("picpop_recent_chats", JSON.stringify(newList));
+  return newList;
 }
 
 function UserFeedbackContent() {
@@ -209,20 +210,28 @@ function UserFeedbackContent() {
   }, [coolId]);
 
 
+  const activeThreadRef = useRef<string | null>(null);
+
   // Load initial chat history from server (IP-based + Session-based), then set up real-time listener
   useEffect(() => {
-    if (!userId) return;
-    let unsub: (() => void) | null = null;
+    if (!userId || authLoading) return;
+    
+    let unsubListeners: (() => void) | null = null;
     let cancelled = false;
 
     const threadParam = searchParams.get("thread");
-    setChatHistory([]); // Reset history when thread changes to ensure isolation
+    
+    // Only reset if we are switching to a DIFFERENT thread
+    if (activeThreadRef.current !== threadParam) {
+      setChatHistory([]);
+      activeThreadRef.current = threadParam;
+    }
+
     const init = async () => {
       try {
         const fns = getAppFunctions();
         if (!fns || !db) return;
         const sessionId = getSessionId();
-        const threadParam = searchParams.get("thread");
         const getHistory = httpsCallable<{ recipientId: string; sessionId: string | null; threadId?: string | null }, { anonymousId: string; items: any[] }>(
           fns, "getAnonymousChatHistory"
         );
@@ -232,12 +241,12 @@ function UserFeedbackContent() {
         const anonId = result.data.anonymousId;
         setMyChatAnonId(anonId);
 
-        if (result.data.items.length > 0) {
+        if (result.data.items && result.data.items.length > 0) {
           setChatHistory(result.data.items);
-          // Only automatically enter chat mode if a specific thread is being viewed
           if (threadParam) setChatMode(true);
           const lastWithImg = [...result.data.items].reverse().find(i => i.feedbackImageUrl || i.attachmentUrl);
-          saveRecentChat(coolId, userId, threadParam, lastWithImg?.feedbackImageUrl || lastWithImg?.attachmentUrl);
+          const updated = saveRecentChat(coolId, userId, threadParam, lastWithImg?.feedbackImageUrl || lastWithImg?.attachmentUrl);
+          setRecentChats(updated);
         }
 
         const currentSessionId = getSessionId();
@@ -246,16 +255,12 @@ function UserFeedbackContent() {
         const qVisitorThread = query(
           collection(db, "feedbacks"),
           where("recipientId", "==", userId),
-          where(threadParam ? "threadId" : "visitorId", "==", threadParam || anonId),
-          limit(100)
-        );
-
-        // 2. Listen for session-specific targeted replies (for shared IPs)
+          where(threadParam ? "threadId" : "visitorId", "==", threadParam || anonId)
+        );        // 2. Listen for session-specific targeted replies (for shared IPs)
         const qSessionThread = query(
           collection(db, "feedbacks"),
           where("recipientId", "==", userId),
-          where(threadParam ? "threadId" : "sessionId", "==", threadParam || currentSessionId),
-          limit(50)
+          where(threadParam ? "threadId" : "sessionId", "==", threadParam || currentSessionId)
         );
 
         const processSnap = (snap: any) => {
@@ -281,27 +286,28 @@ function UserFeedbackContent() {
             // Only automatically enter chat mode if a specific thread is being viewed
             if (threadParam) setChatMode(true);
             const lastWithImg = [...newItems].reverse().find(i => i.feedbackImageUrl || i.attachmentUrl);
-            saveRecentChat(coolId, userId, threadParam, lastWithImg?.feedbackImageUrl || lastWithImg?.attachmentUrl);
+            const updated = saveRecentChat(coolId, userId, threadParam, lastWithImg?.feedbackImageUrl || lastWithImg?.attachmentUrl);
+            setRecentChats(updated);
           }
         };
 
-        let unSubs: (() => void)[] = [
-          onSnapshot(qVisitorThread, processSnap),
-          onSnapshot(qSessionThread, processSnap)
-        ];
+        const unsubVisitor = onSnapshot(qVisitorThread, processSnap);
+        const unsubSession = onSnapshot(qSessionThread, processSnap);
+
+        unsubListeners = () => {
+          unsubVisitor();
+          unsubSession();
+        };
 
         if (authUser?.uid) {
-          // 3. Listen for Messages sent BY ME to this specific owner
           const qSentToOwner = query(
             collection(db, "feedbacks"),
             where("recipientId", "==", userId),
             where("submitterId", "==", authUser.uid),
-            ...(threadParam ? [where("threadId", "==", threadParam)] : []),
-            limit(100)
+            ...(threadParam ? [where("threadId", "==", threadParam)] : [])
           );
-          unSubs.push(onSnapshot(qSentToOwner, processSnap));
-
-          // 4. Listen for verified replies sent BY this owner TO ME
+          const unsubSent = onSnapshot(qSentToOwner, processSnap);
+          
           const qRepliesFromOwner = query(
             collection(db, "feedbacks"),
             where("recipientId", "==", authUser.uid),
@@ -309,20 +315,26 @@ function UserFeedbackContent() {
             ...(threadParam ? [where("threadId", "==", threadParam)] : []),
             limit(100)
           );
-          unSubs.push(onSnapshot(qRepliesFromOwner, processSnap));
-        }
+          const unsubReplies = onSnapshot(qRepliesFromOwner, processSnap);
 
-        unsub = () => {
-          unSubs.forEach(u => u());
-        };
+          const baseUnsub = unsubListeners;
+          unsubListeners = () => {
+            if (baseUnsub) baseUnsub();
+            unsubSent();
+            unsubReplies();
+          };
+        }
       } catch (err) {
         // silently ignore — new user with no history is fine
       }
     };
 
     init();
-    return () => { cancelled = true; unsub?.(); };
-  }, [userId, coolId, authUser?.uid, searchParams.get("thread")]);
+    return () => { 
+      cancelled = true; 
+      if (unsubListeners) unsubListeners(); 
+    };
+  }, [userId, coolId, authUser?.uid, searchParams.toString()]);
 
   const sendTextMessage = useCallback(async (msg: string) => {
     if (!userId || (!msg.trim() && !pendingFile)) return;
@@ -332,7 +344,7 @@ function UserFeedbackContent() {
     setPendingFile(null);
 
     const isAttachment = !!fileToUpload;
-    const threadId = isAttachment ? null : (searchParams.get("thread") || (chatMode ? (chatHistory[chatHistory.length - 1]?.threadId || chatHistory[chatHistory.length - 1]?.id) : null));
+    const threadId = searchParams.get("thread") || (chatMode ? (chatHistory[chatHistory.length - 1]?.threadId || chatHistory[chatHistory.length - 1]?.id) : null);
 
     // OPTIMISTIC UPDATE: Add to UI immediately for speed feel
     const optimisticId = "opt_" + Math.random().toString(36).substring(2, 9);
@@ -388,7 +400,7 @@ function UserFeedbackContent() {
         router.replace(`${window.location.pathname}?thread=${result.data.threadId}`);
         setChatMode(true);
       }
-      saveRecentChat(coolId, userId, result.data.threadId || threadId, attachmentUrl || urlToUse);
+      setRecentChats(saveRecentChat(coolId, userId, result.data.threadId || threadId, attachmentUrl || urlToUse));
 
       // Cleanup optimist after successful sync
       setTimeout(() => {
@@ -451,7 +463,7 @@ function UserFeedbackContent() {
         router.replace(`${window.location.pathname}?thread=${result.data.threadId}`);
         setChatMode(true);
       }
-      saveRecentChat(coolId, userId, result.data.threadId, url);
+      setRecentChats(saveRecentChat(coolId, userId, result.data.threadId, url));
       checkChatModeOrSuccess();
     } catch (err: unknown) {
       toast.error(getErrorMessage(err));
@@ -524,7 +536,7 @@ function UserFeedbackContent() {
         router.replace(`${window.location.pathname}?thread=${result.data.threadId}`);
         setChatMode(true);
       }
-      saveRecentChat(coolId, userId, result.data.threadId, item.feedbackImageUrl);
+      setRecentChats(saveRecentChat(coolId, userId, result.data.threadId, item.feedbackImageUrl));
       checkChatModeOrSuccess();
     } catch (err: unknown) {
       const m = err && typeof err === "object" && "message" in err ? String((err as Error).message) : "Failed to send.";
@@ -567,7 +579,7 @@ function UserFeedbackContent() {
         router.replace(`${window.location.pathname}?thread=${result.data.threadId}`);
         setChatMode(true);
       }
-      saveRecentChat(coolId, userId, result.data.threadId, meme.url);
+      setRecentChats(saveRecentChat(coolId, userId, result.data.threadId, meme.url));
       checkChatModeOrSuccess();
     } catch (err: unknown) {
       const m = err && typeof err === "object" && "message" in err ? String((err as Error).message) : "Failed to send.";
@@ -953,7 +965,15 @@ function UserFeedbackContent() {
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setChatMode(true)}
+                onClick={() => {
+                  const latest = [...chatHistory].reverse().find(m => m.threadId);
+                  if (latest?.threadId) {
+                    router.push(`${window.location.pathname}?thread=${latest.threadId}`);
+                    setChatMode(true);
+                  } else {
+                    setChatMode(true);
+                  }
+                }}
                 className="p-2 rounded-xl bg-white/5 border border-white/10 hover:bg-white/10 transition-all group"
               >
                 <Bell className="w-5 h-5 text-[var(--text-muted)] group-hover:text-[var(--pink)]" />
@@ -1241,7 +1261,15 @@ function UserFeedbackContent() {
         {/* Notification Icon for Landing Page */}
         {!chatMode && !loading && userId && (
           <button
-            onClick={() => setChatMode(true)}
+            onClick={() => {
+              const latest = [...chatHistory].reverse().find(m => m.threadId);
+              if (latest?.threadId) {
+                router.push(`${window.location.pathname}?thread=${latest.threadId}`);
+                setChatMode(true);
+              } else {
+                setChatMode(true);
+              }
+            }}
             className="fixed bottom-6 right-6 w-14 h-14 rounded-full bg-black/80 backdrop-blur-xl border border-white/10 flex items-center justify-center shadow-2xl z-[100] hover:scale-110 transition-all active:scale-95 group"
           >
             <Bell className="w-6 h-6 text-white group-hover:text-[var(--pink)] transition-colors" />

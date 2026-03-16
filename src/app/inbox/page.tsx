@@ -590,7 +590,7 @@ export default function InboxPage() {
       targetUid: partnerSubmitterId ?? undefined,
       sessionId: sessionId ?? undefined,
       coolId: "",
-      threadId: fileToUpload ? undefined : (items.find(i => i.threadId)?.threadId || items.find(i => i.id || i.feedbackId)?.id || items[0].id),
+      threadId: (items.find(i => i.threadId)?.threadId || items.find(i => i.id || i.feedbackId)?.id || items[0].id),
     };
 
     setFeedbacks(prev => [...prev, optItem]);
@@ -620,7 +620,7 @@ export default function InboxPage() {
         feedbackImageUrl: (isImageFile && attachmentUrl) ? attachmentUrl : null,
         attachmentUrl: (!isImageFile && attachmentUrl) ? attachmentUrl : null,
         attachmentName: (!isImageFile && attachmentName) ? attachmentName : null,
-      threadId: fileToUpload ? "" : threadId,
+      threadId: threadId,
       });
 
       // opt_ removed by listener sync - no timeout needed

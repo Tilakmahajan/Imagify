@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, Suspense } from "react";
 import Link from "next/link";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Share2, X, Reply, Check, Camera, ChevronDown, Flag, Trash2 } from "lucide-react";
 import {
   doc,
@@ -32,6 +32,7 @@ interface Feedback {
   feedbackImageUrl: string;
   createdAt: string;
   submitterId?: string | null;
+  threadId?: string;
 }
 
 function buildThread(feedbacks: Feedback[]): { feedback: Feedback; replies: Feedback[] }[] {
@@ -162,6 +163,7 @@ function FeedbackThreadItem({
 
 function FeedbackOnImageContent() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const imageId = searchParams.get("imageId")?.trim() || "";
   const { user, loading: authLoading, isConfigured, signInWithGoogle, signInWithFacebook, signInWithYahoo } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -318,18 +320,26 @@ function FeedbackOnImageContent() {
 
       const submitFeedback = httpsCallable<
         { imageId: string; parentId: string | null; feedbackImageUrl: string },
-        { success: boolean }
+        { success: boolean; threadId: string }
       >(functions, "submitFeedback");
 
-      await submitFeedback({
+      const result = await submitFeedback({
         imageId,
         parentId: replyingTo || null,
         feedbackImageUrl: url,
       });
 
+      const threadId = result.data.threadId;
+
       setSubmitted(true);
       setReplyingTo(null);
-      setTimeout(() => setSubmitted(false), 2000);
+      
+      // Redirect to unified chat thread after a short delay to show "sent" state
+      if (threadId && image?.coolId) {
+        setTimeout(() => {
+          router.push(`/u/${image.coolId}?thread=${threadId}`);
+        }, 1500);
+      }
     } catch (err: unknown) {
       let msg = "Failed to send. Try again.";
       if (err && typeof err === "object") {
